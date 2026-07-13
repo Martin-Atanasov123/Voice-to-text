@@ -4,7 +4,10 @@ import sys
 from pathlib import Path
 
 APP_MUTEX = "FlowLocal_SingleInstance_Mutex"
+SHOW_EVENT = "FlowLocal_ShowWindow_Event"
 ERROR_ALREADY_EXISTS = 183
+EVENT_MODIFY_STATE = 0x0002
+SYNCHRONIZE = 0x00100000
 
 STARTUP_DIR = Path.home() / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup"
 SHORTCUT = STARTUP_DIR / "FlowLocal.lnk"
@@ -15,6 +18,35 @@ def acquire_single_instance() -> bool:
     kernel32 = ctypes.windll.kernel32
     kernel32.CreateMutexW(None, False, APP_MUTEX)
     return kernel32.GetLastError() != ERROR_ALREADY_EXISTS
+
+
+def signal_running_instance() -> None:
+    """Second launch: ask the already-running instance to show its window."""
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenEventW(EVENT_MODIFY_STATE, False, SHOW_EVENT)
+    if handle:
+        kernel32.SetEvent(handle)
+        kernel32.CloseHandle(handle)
+
+
+def watch_show_requests(callback) -> None:
+    """Daemon thread: fire `callback()` whenever another launch signals us."""
+    import threading
+
+    def _watch():
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.CreateEventW(None, False, False, SHOW_EVENT)
+        if not handle:
+            return
+        while True:
+            if kernel32.WaitForSingleObject(handle, 0xFFFFFFFF) != 0:
+                return
+            try:
+                callback()
+            except Exception:
+                pass
+
+    threading.Thread(target=_watch, name="show-request", daemon=True).start()
 
 
 def _make_shortcut(path: Path, icon: Path | None = None) -> None:

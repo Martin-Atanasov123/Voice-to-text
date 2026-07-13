@@ -1,7 +1,9 @@
 """Application wiring: QApplication + orchestrator + hook + tray + overlay + main window."""
 import logging
+import logging.handlers
 import sys
 
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
@@ -17,6 +19,34 @@ from .ui.rewrite_popup import RewritePopup
 from .ui.tray import Tray
 
 log = logging.getLogger(__name__)
+
+
+def _setup_logging() -> None:
+    """Console + rotating file — pythonw has no console, so failures must land
+    in %APPDATA%\\FlowLocal\\flowlocal.log to be diagnosable at all."""
+    from .config import APP_DIR
+
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    try:
+        handlers.append(
+            logging.handlers.RotatingFileHandler(
+                APP_DIR / "flowlocal.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8"
+            )
+        )
+    except OSError:
+        pass
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        handlers=handlers,
+    )
+
+
+class _ShowBridge(QObject):
+    """Marshals 'show the window' requests from the watcher thread to Qt."""
+
+    show_requested = Signal()
 
 
 class FlowLocalApp:
@@ -79,6 +109,15 @@ class FlowLocalApp:
             QMessageBox.critical(None, "FlowLocal", "System tray is not available.")
             return 1
         self.tray.show()
+        # the window opens on launch and on every re-launch of the desktop icon
+        from .startup import watch_show_requests
+
+        self._show_bridge = _ShowBridge()
+        self._show_bridge.show_requested.connect(
+            lambda: self.window.open_page(MainWindow.PAGE_OVERVIEW)
+        )
+        watch_show_requests(self._show_bridge.show_requested.emit)
+        self.window.open_page(MainWindow.PAGE_OVERVIEW)
         if self.cfg.cleanup_enabled and not self.orch.cleaner.health_check():
             msg = (
                 "Ollama is not running — dictations will paste raw text.\n"
@@ -136,13 +175,29 @@ class FlowLocalApp:
 
 
 def main() -> int:
-    from .startup import acquire_single_instance, create_desktop_shortcut, set_autostart
+    from .startup import (
+        acquire_single_instance,
+        create_desktop_shortcut,
+        set_autostart,
+        signal_running_instance,
+    )
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    _setup_logging()
     if not acquire_single_instance():
-        print("FlowLocal is already running (check the system tray).")
+        # second double-click of the icon = "show me the window"
+        signal_running_instance()
+        log.info("FlowLocal already running — asked it to show its window.")
         return 0
-    app = FlowLocalApp(sys.argv)
+    try:
+        app = FlowLocalApp(sys.argv)
+    except Exception:
+        log.exception("FlowLocal failed to start")
+        fallback = QApplication.instance() or QApplication(sys.argv)
+        QMessageBox.critical(
+            None, "FlowLocal",
+            "FlowLocal failed to start.\nDetails are in %APPDATA%\\FlowLocal\\flowlocal.log",
+        )
+        return 1
     try:
         create_desktop_shortcut()  # idempotent: keeps the Desktop icon fresh
         if app.cfg.autostart:

@@ -32,11 +32,20 @@ or double-click `run_flowlocal.pyw` (no console window). The tray icon turns **b
 ## Opening the app window / dashboard
 
 On first run FlowLocal puts a **FlowLocal icon on your Desktop** — double-click it to start
-the app. Once running, open the main window any of these ways:
+the app; the window opens automatically. Once running, open the main window any of these ways:
 
+- **Double-click the desktop icon again** — the running app brings its window up.
 - **Left-click the tray icon** (near the clock; check the **^ hidden icons** arrow if you
   don't see it) — opens the window on the Overview page.
 - Right-click the tray icon → **Settings…** or **History…** jumps straight to that page.
+
+**Do NOT run FlowLocal as administrator.** Windows blocks elevating the unsigned venv
+`pythonw.exe` ("This app has been blocked for your protection") — and FlowLocal is designed
+to run without admin rights anyway. Just double-click the icon normally.
+
+**Troubleshooting:** everything the app does is logged to `%APPDATA%\FlowLocal\flowlocal.log` —
+if something seems dead, look there first. If startup fails entirely, a dialog points to the
+same log.
 
 The window has a sidebar with five pages:
 
