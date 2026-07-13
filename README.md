@@ -14,34 +14,37 @@ or double-click `run_flowlocal.pyw` (no console window). The tray icon turns **b
 - Language: Windows keyboard layout at the moment you press (EN layout → English, BG layout → Bulgarian).
 - If Ollama isn't running, dictations still work — raw transcript is pasted.
 
-## Opening the Settings / Models & AI dashboard
+## Opening the app window / dashboard
 
-FlowLocal has **no regular window** — it lives only in the Windows system tray (the small icons
-near the clock, bottom-right of your screen). To open the dashboard:
+On first run FlowLocal puts a **FlowLocal icon on your Desktop** — double-click it to start
+the app. Once running, open the main window any of these ways:
 
-1. **Start the app first** (see "Run" above) and wait for the tray icon to turn **blue** —
-   that means it's ready. There is no separate "dashboard" program to launch; it's a window
-   inside the running app.
-2. Look at the tray icons next to the clock. If you don't see the FlowLocal icon (a small
-   circle with a microphone shape), click the **^ "Show hidden icons"** arrow — Windows
-   often hides new tray icons there. You can drag it out next to the clock so it's always visible.
-3. **Right-click** the FlowLocal tray icon. A menu appears with: Pause/Resume dictation,
-   **Settings…**, History…, Quit.
-4. Click **Settings…** — a window opens with two tabs: **General** and **Models & AI**.
-5. Click the **Models & AI** tab — this is the "dashboard": live GPU/VRAM info with a
-   hardware-based recommendation, dropdowns to pick the Ollama model used for English and
-   for Bulgarian cleanup (from what's already installed), a switch to use an external API
-   instead of local Ollama (Base URL, API key, model name), and a **"Test selected backend"**
-   button to confirm it works before saving.
-6. Change what you want, then click **Save** at the bottom (or **Close** to discard).
-   Note: changing the speech model/device or the cleanup backend only takes effect the
-   *next time you start FlowLocal* — quit it from the tray menu and run it again.
-   Note: switching to an external API sends your dictated text off this PC; local Ollama
-   stays 100% offline.
+- **Left-click the tray icon** (near the clock; check the **^ hidden icons** arrow if you
+  don't see it) — opens the window on the Overview page.
+- Right-click the tray icon → **Settings…** or **History…** jumps straight to that page.
 
-If nothing appears when you right-click, the app probably isn't running yet, or crashed
-during the ~35s startup — check by running it from a terminal (`.venv\Scripts\python -m
-flowlocal`) so you can see any error printed there.
+The window has a sidebar with five pages:
+
+- **Overview** — live status (Ready / Recording / …) and your stats: dictations, words
+  spoken, dictations today, minutes saved vs typing.
+- **History** — every dictation with raw + cleaned text, copy buttons, clear.
+- **Dictionary** — names/terms that must always be spelled exactly right (they bias speech
+  recognition AND are enforced during AI cleanup). Add e.g. product names, colleagues.
+- **Snippets** — voice shortcuts: dictate exactly the cue phrase (e.g. "my signature") and
+  the full stored text is pasted verbatim instead.
+- **Settings** — two tabs: **General** (mic, cleanup on/off, timeout, autostart) and
+  **Models & AI** (live GPU/VRAM info with hardware-based recommendation, per-language
+  Ollama model pickers, external OpenAI-compatible API option with a test button).
+
+Click **Save** in Settings to persist. Speech model/device and backend changes take effect
+the *next time you start FlowLocal* (Quit from the tray menu, then start again). The API
+option sends dictated text off this PC; local Ollama stays 100% offline.
+
+**Closing the window does not quit the app** — it keeps listening in the tray. Quit only
+via the tray menu.
+
+If the window won't open, the app probably isn't running or crashed during the ~35s
+startup — run `.venv\Scripts\python -m flowlocal` in a terminal to see any error.
 
 ## Requirements
 
