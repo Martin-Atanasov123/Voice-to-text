@@ -14,6 +14,10 @@ or double-click `run_flowlocal.pyw` (no console window). The tray icon turns **b
 - Language: Windows keyboard layout at the moment you press (EN layout → English, BG layout → Bulgarian).
 - Tray menu: Pause/Resume (CapsLock works normally while paused), Settings, History, Quit.
 - If Ollama isn't running, dictations still work — raw transcript is pasted.
+- Settings → "Models & AI" dashboard: live GPU info with model recommendations for your
+  hardware, pick installed Ollama models per language, or switch cleanup to any
+  OpenAI-compatible API (OpenAI, Groq, OpenRouter, LM Studio…) with a built-in test button.
+  Note: the API option sends dictated text off this PC; local Ollama stays 100% offline.
 
 ## Requirements
 
