@@ -30,6 +30,10 @@ class Config:
     api_base_url: str = "https://api.openai.com/v1"
     api_key: str = ""
     api_model: str = "gpt-4o-mini"
+    # v1.3: context-aware dictation
+    smart_context_enabled: bool = True     # tone follows the focused app
+    profile: str = "general"               # general | developer | student
+    style_sample: str = ""                 # short sample of the user's writing style
     cleanup_enabled: bool = True
     cleanup_timeout_s: float = 20.0
     tap_threshold_s: float = 0.3

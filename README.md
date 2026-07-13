@@ -11,7 +11,16 @@ Local Wispr Flow–style voice-to-text for Windows. **Hold CapsLock → speak �
 or double-click `run_flowlocal.pyw` (no console window). The tray icon turns **blue** when ready (~35s first warm-up), **red** while recording, **orange** while processing.
 
 - **Hold CapsLock** and speak, release to finish. A quick tap does nothing (CapsLock toggle is disabled while FlowLocal runs; use Shift for capitals).
+- **Select text anywhere + press Ctrl+CapsLock** → a popup offers Professional / Friendly /
+  Shorter / Longer / Email / Fix grammar — the rewritten text replaces your selection.
+  Works on any text in any app, not just dictations.
+- **Smart context**: the dictation tone follows the focused app automatically — casual in
+  Discord/Slack/Viber, polite email prose in Outlook, terse technical text in VS Code/
+  terminals, polished prose in Word. Toggle in Settings → General.
+- **Profiles & your style**: pick a profile (developer/student) and optionally paste a short
+  sample of your own writing — cleanup leans toward your tone.
 - Language: Windows keyboard layout at the moment you press (EN layout → English, BG layout → Bulgarian).
+- Snippets support `{{date}}`, `{{time}}`, `{{day}}` placeholders, filled at paste time.
 - If Ollama isn't running, dictations still work — raw transcript is pasted.
 
 ## Opening the app window / dashboard

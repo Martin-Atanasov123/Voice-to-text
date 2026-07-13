@@ -64,6 +64,65 @@ class Dictionary:
         )
 
 
+PROFILES = {
+    "general": {"en": "", "bg": ""},
+    "developer": {
+        "en": "\n\nPROFILE: the user is a software developer. Treat words like commit, deploy, "
+              "merge, endpoint, prop, hook as technical vocabulary — never 'correct' them; "
+              "keep code identifiers and product names verbatim.",
+        "bg": "\n\nПРОФИЛ: потребителят е програмист. Думи като commit, deploy, merge, "
+              "endpoint са технически термини — никога не ги 'поправяй' и не ги превеждай; "
+              "запазвай идентификатори и имена на продукти дословно.",
+    },
+    "student": {
+        "en": "\n\nPROFILE: the user is a student. Lean toward clear, well-structured prose "
+              "suitable for coursework and notes.",
+        "bg": "\n\nПРОФИЛ: потребителят е студент. Предпочитай ясна, добре структурирана реч, "
+              "подходяща за учебни материали и записки.",
+    },
+}
+
+
+def profile_clause(profile: str, language: str) -> str:
+    entry = PROFILES.get(profile, PROFILES["general"])
+    return entry.get(language, entry["en"])
+
+
+def style_clause(sample: str, language: str) -> str:
+    sample = sample.strip()[:500]
+    if not sample:
+        return ""
+    if language == "bg":
+        return (
+            "\n\nСТИЛ НА ПОТРЕБИТЕЛЯ: когато избираш измежду равностойни формулировки, "
+            f"следвай тона и навиците от този негов примерен текст:\n---\n{sample}\n---"
+        )
+    return (
+        "\n\nUSER'S STYLE: when choosing between equivalent phrasings, match the tone and "
+        f"habits of this sample of their writing:\n---\n{sample}\n---"
+    )
+
+
+_BG_DAYS = ["понеделник", "вторник", "сряда", "четвъртък", "петък", "събота", "неделя"]
+_EN_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def render_snippet(text: str) -> str:
+    """Fill {{date}}, {{time}}, {{day}} placeholders at paste time."""
+    if "{{" not in text:
+        return text
+    import datetime
+
+    now = datetime.datetime.now()
+    has_cyrillic = any("Ѐ" <= ch <= "ӿ" for ch in text)
+    day = (_BG_DAYS if has_cyrillic else _EN_DAYS)[now.weekday()]
+    return (
+        text.replace("{{date}}", now.strftime("%d.%m.%Y"))
+        .replace("{{time}}", now.strftime("%H:%M"))
+        .replace("{{day}}", day)
+    )
+
+
 def _normalize(text: str) -> str:
     """Lowercase, strip punctuation/extra spaces — tolerant cue matching."""
     text = unicodedata.normalize("NFKC", text).lower()

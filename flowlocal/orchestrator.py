@@ -21,9 +21,16 @@ from .audio import Recorder
 from .cleanup import create_cleaner
 from .config import Config
 from .history import History
-from .inserter import insert_text
+from .inserter import (
+    capture_selection,
+    insert_text,
+    paste_replacing_selection,
+    restore_clipboard,
+)
 from .layout import get_dictation_language
-from .personal import Dictionary, Snippets
+from .context import tone_clause
+from .personal import Dictionary, Snippets, profile_clause, render_snippet, style_clause
+from .rewrite import STYLES, detect_language
 from .stt import Transcriber
 
 log = logging.getLogger(__name__)
@@ -32,26 +39,14 @@ user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
 
-def _foreground_exe() -> str:
-    """Process name of the focused window, for history records."""
-    try:
-        import psutil  # optional; not in requirements — graceful degrade
-    except ImportError:
-        psutil = None
-    try:
-        hwnd = user32.GetForegroundWindow()
-        pid = ctypes.wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        if psutil:
-            return psutil.Process(pid.value).name()
-        return str(pid.value)
-    except Exception:
-        return "?"
+from .context import foreground_exe as _foreground_exe  # noqa: E402
 
 
 class Orchestrator(QObject):
     # state name + human detail; UI (overlay/tray) renders from this alone
     state_changed = Signal(str, str)
+    # selection captured, ready for the style popup (app shows RewritePopup)
+    rewrite_ready = Signal()
 
     def __init__(self, cfg: Config):
         super().__init__()
@@ -68,6 +63,7 @@ class Orchestrator(QObject):
         self._cmds: queue.Queue = queue.Queue()
         self._worker = threading.Thread(target=self._run, name="pipeline", daemon=True)
         self._ctx: dict = {}
+        self._rw: dict | None = None  # pending rewrite: text, saved clipboard, hwnd
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -128,6 +124,19 @@ class Orchestrator(QObject):
     def on_tap(self) -> None:
         self._cmds.put(("cancel", None))
 
+    def on_combo(self) -> None:
+        """Ctrl+CapsLock from the hook thread: rewrite the current selection."""
+        with self._state_lock:
+            if self.state != "IDLE":
+                return
+        self._cmds.put(("rewrite_capture", None))
+
+    def choose_rewrite_style(self, style_key: str) -> None:
+        self._cmds.put(("rewrite_run", style_key))
+
+    def cancel_rewrite(self) -> None:
+        self._cmds.put(("rewrite_cancel", None))
+
     def toggle_pause(self) -> bool:
         """Returns True when now paused."""
         with self._state_lock:
@@ -155,6 +164,12 @@ class Orchestrator(QObject):
                     self._do_cancel()
                 elif cmd == "finish":
                     self._do_finish(arg)
+                elif cmd == "rewrite_capture":
+                    self._do_rewrite_capture()
+                elif cmd == "rewrite_run":
+                    self._do_rewrite_run(arg)
+                elif cmd == "rewrite_cancel":
+                    self._do_rewrite_cancel()
             except Exception as e:
                 log.exception("pipeline error")
                 self._set_state("ERROR", str(e))
@@ -177,6 +192,54 @@ class Orchestrator(QObject):
             self.recorder.stop()
             self._set_state("IDLE", "")
 
+    # -- rewrite-on-demand ---------------------------------------------------
+    def _do_rewrite_capture(self) -> None:
+        hwnd = user32.GetForegroundWindow()
+        text, saved = capture_selection()
+        if not text or not text.strip():
+            restore_clipboard(saved)
+            self._flash("WARNING", "no text selected")
+            return
+        self._rw = {"text": text, "saved": saved, "hwnd": hwnd, "t0": time.monotonic(),
+                    "app": _foreground_exe()}
+        self.rewrite_ready.emit()
+
+    def _do_rewrite_run(self, style_key: str) -> None:
+        rw, self._rw = self._rw, None
+        if rw is None or style_key not in STYLES:
+            return
+        lang = detect_language(rw["text"])
+        self._set_state("CLEANING", f"rewriting ({STYLES[style_key][0].lower()})…")
+        result, ok = self.cleaner.transform(rw["text"], STYLES[style_key][1], lang)
+        if not ok:
+            restore_clipboard(rw["saved"])
+            self._flash("ERROR", "rewrite failed — selection unchanged")
+            self._set_state("IDLE", "")
+            return
+        self._set_state("PASTING", "")
+        try:
+            user32.SetForegroundWindow(rw["hwnd"])  # focus back on the target app
+            time.sleep(0.15)
+            paste_replacing_selection(result, rw["saved"])
+        except Exception as e:
+            log.warning("rewrite paste failed: %s", e)
+            restore_clipboard(rw["saved"])
+            self._flash("ERROR", "paste failed — text is in history")
+        self.history.add(
+            language=lang,
+            raw_text=rw["text"],
+            cleaned_text=result,
+            target_app=rw.get("app", "?"),
+            duration_ms=int((time.monotonic() - rw["t0"]) * 1000),
+            status=f"rewrite:{style_key}",
+        )
+        self._set_state("IDLE", "")
+
+    def _do_rewrite_cancel(self) -> None:
+        rw, self._rw = self._rw, None
+        if rw is not None:
+            restore_clipboard(rw["saved"])
+
     def _do_finish(self, held: float | None) -> None:
         if self.state != "RECORDING":
             return
@@ -196,12 +259,17 @@ class Orchestrator(QObject):
 
         snippet = self.snippets.match(raw)
         if snippet is not None:
-            text, status = snippet, "snippet"
+            text, status = render_snippet(snippet), "snippet"
         else:
             text, status = raw, "cleanup_off"
             if self.cfg.cleanup_enabled:
                 self._set_state("CLEANING", "")
-                cleaned, ok = self.cleaner.clean(raw, lang, self.dictionary.prompt_clause(lang))
+                extra = self.dictionary.prompt_clause(lang)
+                if self.cfg.smart_context_enabled:
+                    extra += tone_clause(self._ctx.get("app", "?"), lang)
+                extra += profile_clause(self.cfg.profile, lang)
+                extra += style_clause(self.cfg.style_sample, lang)
+                cleaned, ok = self.cleaner.clean(raw, lang, extra)
                 if ok:
                     text, status = cleaned, "cleaned"
                 else:

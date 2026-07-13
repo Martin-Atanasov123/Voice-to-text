@@ -190,7 +190,8 @@ class SnippetsPage(QWidget):
         title.setObjectName("PageTitle")
         hint = QLabel(
             "Voice shortcuts: dictate exactly the cue phrase and the full text is pasted "
-            "instead. Great for email signatures, addresses, links you say often."
+            "instead. Great for email signatures, addresses, links you say often. "
+            "Placeholders filled at paste time: {{date}}, {{time}}, {{day}}."
         )
         hint.setObjectName("PageHint")
         hint.setWordWrap(True)

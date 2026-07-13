@@ -20,6 +20,7 @@ kernel32 = ctypes.windll.kernel32
 
 WH_KEYBOARD_LL = 13
 VK_CAPITAL = 0x14
+VK_CONTROL = 0x11
 WM_KEYDOWN = 0x0100
 WM_KEYUP = 0x0101
 WM_SYSKEYDOWN = 0x0104
@@ -57,14 +58,17 @@ class CapsLockHook(threading.Thread):
         on_release: Callable[[float], None],
         on_tap: Callable[[], None] | None = None,
         tap_threshold_s: float = 0.3,
+        on_combo: Callable[[], None] | None = None,
     ):
         super().__init__(name="capslock-hook", daemon=True)
         self.on_press = on_press
         self.on_release = on_release
         self.on_tap = on_tap or (lambda: None)
+        self.on_combo = on_combo or (lambda: None)  # Ctrl+CapsLock -> rewrite
         self.tap_threshold_s = tap_threshold_s
         self.enabled = True  # when False, CapsLock passes through untouched
         self._is_down = False
+        self._is_combo = False
         self._down_at = 0.0
         self._proc = HOOKPROC(self._hook_proc)  # keep ref: GC'd callback = crash
         self._hook = None
@@ -79,8 +83,13 @@ class CapsLockHook(threading.Thread):
                     if not self._is_down:  # dedupe key auto-repeat
                         self._is_down = True
                         self._down_at = time.monotonic()
+                        # physical Ctrl held -> rewrite combo, not dictation
+                        self._is_combo = bool(user32.GetAsyncKeyState(VK_CONTROL) & 0x8000)
                         try:
-                            self.on_press()
+                            if self._is_combo:
+                                self.on_combo()
+                            else:
+                                self.on_press()
                         except Exception:
                             pass
                     return 1  # suppress toggle
@@ -89,7 +98,9 @@ class CapsLockHook(threading.Thread):
                         self._is_down = False
                         held = time.monotonic() - self._down_at
                         try:
-                            if held < self.tap_threshold_s:
+                            if self._is_combo:
+                                self._is_combo = False  # combo fired on key-down
+                            elif held < self.tap_threshold_s:
                                 self.on_tap()
                             else:
                                 self.on_release(held)

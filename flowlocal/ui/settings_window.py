@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QRadioButton,
     QTabWidget,
@@ -151,11 +152,28 @@ class SettingsWindow(QWidget):
         self._autostart = QCheckBox("Start with Windows")
         self._autostart.setChecked(cfg.autostart)
 
+        self._smart_context = QCheckBox(
+            "Smart context — tone follows the app (chat casual, email polite, code technical)"
+        )
+        self._smart_context.setChecked(cfg.smart_context_enabled)
+        self._profile = QComboBox()
+        self._profile.addItems(["general", "developer", "student"])
+        self._profile.setCurrentText(cfg.profile)
+        self._style = QPlainTextEdit(cfg.style_sample)
+        self._style.setPlaceholderText(
+            "Optional: paste a short sample of YOUR writing (an email, a message). "
+            "Cleanup will lean toward your tone and habits. Max ~500 characters used."
+        )
+        self._style.setMaximumHeight(90)
+
         form = QFormLayout()
         form.addRow("Microphone:", self._mic)
         form.addRow(self._cleanup)
         form.addRow("Cleanup timeout:", self._timeout)
         form.addRow(self._autostart)
+        form.addRow(self._smart_context)
+        form.addRow("Profile:", self._profile)
+        form.addRow("Your style sample:", self._style)
         w = QWidget()
         w.setLayout(form)
         return w
@@ -268,6 +286,9 @@ class SettingsWindow(QWidget):
         cfg.mic_device = self._mic.currentData()
         cfg.cleanup_enabled = self._cleanup.isChecked()
         cfg.cleanup_timeout_s = self._timeout.value()
+        cfg.smart_context_enabled = self._smart_context.isChecked()
+        cfg.profile = self._profile.currentText()
+        cfg.style_sample = self._style.toPlainText().strip()
         cfg.whisper_model = self._model.currentText()
         cfg.whisper_device = self._device.currentText()
         cfg.cleanup_backend = "api" if self._backend_api.isChecked() else "ollama"

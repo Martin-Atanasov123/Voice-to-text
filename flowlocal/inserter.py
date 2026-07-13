@@ -82,6 +82,45 @@ def _set_clipboard_text(text: str) -> bool:
         win32clipboard.CloseClipboard()
 
 
+def capture_selection() -> tuple[str | None, str | None]:
+    """Copy the current selection via Ctrl+C.
+
+    Returns (selected_text, saved_clipboard). selected_text is None when nothing
+    was selected (the clipboard stayed on our empty sentinel). The caller is
+    responsible for eventually restoring saved_clipboard.
+    """
+    _wait_modifiers_released()
+    saved = _get_clipboard_text()
+    _set_clipboard_text("")  # sentinel: unchanged means no selection
+    _send_key(VK_CONTROL)
+    _send_key(ord("C"))
+    _send_key(ord("C"), up=True)
+    _send_key(VK_CONTROL, up=True)
+    time.sleep(0.15)
+    text = _get_clipboard_text()
+    return (text if text else None), saved
+
+
+def restore_clipboard(saved: str | None) -> None:
+    if saved is not None:
+        _set_clipboard_text(saved)
+
+
+def paste_replacing_selection(text: str, saved: str | None, restore_delay_s: float = 0.3) -> None:
+    """Paste `text` over the current selection, then restore the saved clipboard."""
+    if not text:
+        return
+    _wait_modifiers_released()
+    if not _set_clipboard_text(text):
+        raise RuntimeError("Could not open clipboard to set text")
+    _send_key(VK_CONTROL)
+    _send_key(ord("V"))
+    _send_key(ord("V"), up=True)
+    _send_key(VK_CONTROL, up=True)
+    time.sleep(restore_delay_s)
+    restore_clipboard(saved)
+
+
 def insert_text(text: str, restore_delay_s: float = 0.3) -> None:
     """Paste `text` into the focused window via clipboard, restoring old text after."""
     if not text:

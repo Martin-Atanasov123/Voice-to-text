@@ -11,6 +11,7 @@ from .orchestrator import Orchestrator
 from .ui import theme
 from .ui.main_window import MainWindow
 from .ui.overlay import Overlay
+from .ui.rewrite_popup import RewritePopup
 from .ui.tray import Tray
 
 log = logging.getLogger(__name__)
@@ -35,6 +36,11 @@ class FlowLocalApp:
         )
         self.tray.activated.connect(self._tray_activated)
 
+        self.rewrite_popup = RewritePopup()
+        self.orch.rewrite_ready.connect(self.rewrite_popup.show_at_cursor)
+        self.rewrite_popup.style_chosen.connect(self.orch.choose_rewrite_style)
+        self.rewrite_popup.dismissed.connect(self.orch.cancel_rewrite)
+
         # app icon (window title bar, taskbar) — also used by the desktop shortcut
         from .startup import app_icon_path, write_app_icon
 
@@ -54,6 +60,7 @@ class FlowLocalApp:
             on_release=self.orch.on_release,
             on_tap=self.orch.on_tap,
             tap_threshold_s=self.cfg.tap_threshold_s,
+            on_combo=self.orch.on_combo,
         )
 
     def run(self) -> int:
