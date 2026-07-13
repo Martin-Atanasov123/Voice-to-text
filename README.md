@@ -12,12 +12,36 @@ or double-click `run_flowlocal.pyw` (no console window). The tray icon turns **b
 
 - **Hold CapsLock** and speak, release to finish. A quick tap does nothing (CapsLock toggle is disabled while FlowLocal runs; use Shift for capitals).
 - Language: Windows keyboard layout at the moment you press (EN layout → English, BG layout → Bulgarian).
-- Tray menu: Pause/Resume (CapsLock works normally while paused), Settings, History, Quit.
 - If Ollama isn't running, dictations still work — raw transcript is pasted.
-- Settings → "Models & AI" dashboard: live GPU info with model recommendations for your
-  hardware, pick installed Ollama models per language, or switch cleanup to any
-  OpenAI-compatible API (OpenAI, Groq, OpenRouter, LM Studio…) with a built-in test button.
-  Note: the API option sends dictated text off this PC; local Ollama stays 100% offline.
+
+## Opening the Settings / Models & AI dashboard
+
+FlowLocal has **no regular window** — it lives only in the Windows system tray (the small icons
+near the clock, bottom-right of your screen). To open the dashboard:
+
+1. **Start the app first** (see "Run" above) and wait for the tray icon to turn **blue** —
+   that means it's ready. There is no separate "dashboard" program to launch; it's a window
+   inside the running app.
+2. Look at the tray icons next to the clock. If you don't see the FlowLocal icon (a small
+   circle with a microphone shape), click the **^ "Show hidden icons"** arrow — Windows
+   often hides new tray icons there. You can drag it out next to the clock so it's always visible.
+3. **Right-click** the FlowLocal tray icon. A menu appears with: Pause/Resume dictation,
+   **Settings…**, History…, Quit.
+4. Click **Settings…** — a window opens with two tabs: **General** and **Models & AI**.
+5. Click the **Models & AI** tab — this is the "dashboard": live GPU/VRAM info with a
+   hardware-based recommendation, dropdowns to pick the Ollama model used for English and
+   for Bulgarian cleanup (from what's already installed), a switch to use an external API
+   instead of local Ollama (Base URL, API key, model name), and a **"Test selected backend"**
+   button to confirm it works before saving.
+6. Change what you want, then click **Save** at the bottom (or **Close** to discard).
+   Note: changing the speech model/device or the cleanup backend only takes effect the
+   *next time you start FlowLocal* — quit it from the tray menu and run it again.
+   Note: switching to an external API sends your dictated text off this PC; local Ollama
+   stays 100% offline.
+
+If nothing appears when you right-click, the app probably isn't running yet, or crashed
+during the ~35s startup — check by running it from a terminal (`.venv\Scripts\python -m
+flowlocal`) so you can see any error printed there.
 
 ## Requirements
 
