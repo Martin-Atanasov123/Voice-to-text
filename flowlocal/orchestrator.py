@@ -47,6 +47,8 @@ class Orchestrator(QObject):
     state_changed = Signal(str, str)
     # selection captured, ready for the style popup (app shows RewritePopup)
     rewrite_ready = Signal()
+    # clipboard action finished: (title, result text) for the ResultViewer
+    clipboard_result = Signal(str, str)
 
     def __init__(self, cfg: Config):
         super().__init__()
@@ -102,7 +104,7 @@ class Orchestrator(QObject):
         self.state_changed.emit(kind, detail)
 
     # -- hook-thread entry points (must return in microseconds) -------------
-    def on_press(self) -> None:
+    def on_press(self, command: bool = False) -> None:
         with self._state_lock:
             if self.state == "PAUSED":
                 return
@@ -116,7 +118,7 @@ class Orchestrator(QObject):
         if busy:
             self._flash("BUSY", "busy with previous dictation")
             return
-        self._cmds.put(("start", None))
+        self._cmds.put(("start", command))
 
     def on_release(self, held: float) -> None:
         self._cmds.put(("finish", held))
@@ -136,6 +138,9 @@ class Orchestrator(QObject):
 
     def cancel_rewrite(self) -> None:
         self._cmds.put(("rewrite_cancel", None))
+
+    def run_clipboard_action(self, action: str, text: str) -> None:
+        self._cmds.put(("clipboard_run", (action, text)))
 
     def toggle_pause(self) -> bool:
         """Returns True when now paused."""
@@ -159,7 +164,7 @@ class Orchestrator(QObject):
                 if cmd == "quit":
                     return
                 elif cmd == "start":
-                    self._do_start()
+                    self._do_start(bool(arg))
                 elif cmd == "cancel":
                     self._do_cancel()
                 elif cmd == "finish":
@@ -170,6 +175,8 @@ class Orchestrator(QObject):
                     self._do_rewrite_run(arg)
                 elif cmd == "rewrite_cancel":
                     self._do_rewrite_cancel()
+                elif cmd == "clipboard_run":
+                    self._do_clipboard_run(*arg)
             except Exception as e:
                 log.exception("pipeline error")
                 self._set_state("ERROR", str(e))
@@ -178,14 +185,16 @@ class Orchestrator(QObject):
             finally:
                 self._cmds.task_done()
 
-    def _do_start(self) -> None:
+    def _do_start(self, command: bool = False) -> None:
         self._ctx = {
             "language": get_dictation_language(),
             "app": _foreground_exe(),
             "t0": time.monotonic(),
+            "command": command,
         }
         self.recorder.start()
-        self._set_state("RECORDING", self._ctx["language"])
+        detail = self._ctx["language"] + (" · command" if command else "")
+        self._set_state("RECORDING", detail)
 
     def _do_cancel(self) -> None:
         if self.state == "RECORDING":
@@ -240,6 +249,19 @@ class Orchestrator(QObject):
         if rw is not None:
             restore_clipboard(rw["saved"])
 
+    # -- clipboard AI ----------------------------------------------------------
+    def _do_clipboard_run(self, action: str, text: str) -> None:
+        from .clipboard_ai import ACTIONS, run_action
+
+        label = ACTIONS[action][0]
+        self._set_state("CLEANING", f"{label.lower()}…")
+        result, ok = run_action(self.cleaner, action, text)
+        if ok:
+            self.clipboard_result.emit(label, result)
+        else:
+            self._flash("ERROR", f"{label.lower()} failed")
+        self._set_state("IDLE", "")
+
     def _do_finish(self, held: float | None) -> None:
         if self.state != "RECORDING":
             return
@@ -257,8 +279,15 @@ class Orchestrator(QObject):
             self._set_state("IDLE", "")
             return
 
-        snippet = self.snippets.match(raw)
-        if snippet is not None:
+        if self._ctx.get("command"):
+            self._set_state("CLEANING", "writing…")
+            generated, ok = self.cleaner.generate(raw, lang, style_clause(self.cfg.style_sample, lang))
+            if not ok:
+                self._flash("ERROR", "command failed — nothing pasted")
+                self._set_state("IDLE", "")
+                return
+            text, status = generated, "command"
+        elif (snippet := self.snippets.match(raw)) is not None:
             text, status = render_snippet(snippet), "snippet"
         else:
             text, status = raw, "cleanup_off"
@@ -287,7 +316,7 @@ class Orchestrator(QObject):
         self.history.add(
             language=lang,
             raw_text=raw,
-            cleaned_text=text if status in ("cleaned", "snippet") else None,
+            cleaned_text=text if status in ("cleaned", "snippet", "command") else None,
             target_app=self._ctx.get("app", "?"),
             duration_ms=int((time.monotonic() - t0) * 1000),
             status=status,

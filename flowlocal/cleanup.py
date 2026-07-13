@@ -175,6 +175,31 @@ REWRITE_FEW_SHOT = {
 }
 
 
+COMMAND_SYSTEM = (
+    "You are a text-writing engine. The user message is a spoken INSTRUCTION describing text "
+    "they want produced — an email, a chat message, a list, a commit message, a paragraph. "
+    "Write ONLY the requested text itself, ready to paste where the user is typing. Write it "
+    "in the same language as the instruction unless it explicitly asks for another language. "
+    "Never ask questions — make reasonable assumptions. Keep it appropriately brief. "
+    "Output only the produced text — no preamble, no quotes, no explanations."
+)
+
+COMMAND_FEW_SHOT = {
+    "en": [
+        {"role": "user", "content": "write a short email to my boss that I'll be 30 minutes late today"},
+        {
+            "role": "assistant",
+            "content": "Hi,\n\nI wanted to let you know I'll be about 30 minutes late today. "
+            "Apologies for the inconvenience — I'll make up the time this afternoon.\n\nBest regards",
+        },
+    ],
+    "bg": [
+        {"role": "user", "content": "напиши кратко съобщение до колегите че срещата се мести за три следобед"},
+        {"role": "assistant", "content": "Колеги, срещата се премества за 15:00 днес. Извинявайте за промяната в последния момент."},
+    ],
+}
+
+
 class _BaseCleaner:
     timeout_s: float = 20.0
 
@@ -203,7 +228,23 @@ class _BaseCleaner:
             log.warning("Cleanup failed: %s", e)
             return raw, False
 
-    def transform(self, text: str, instruction: str, language: str) -> tuple[str, bool]:
+    def generate(self, instruction: str, language: str, extra_system: str = "") -> tuple[str, bool]:
+        """Command mode: the dictated `instruction` describes text to write."""
+        messages = [
+            {"role": "system", "content": COMMAND_SYSTEM + extra_system},
+            *COMMAND_FEW_SHOT.get(language, COMMAND_FEW_SHOT["en"]),
+            {"role": "user", "content": instruction},
+        ]
+        try:
+            out = self._send(messages, language, timeout=max(self.timeout_s, 60.0))
+            return (out, True) if out else ("", False)
+        except Exception as e:
+            log.warning("Command generation failed: %s", e)
+            return "", False
+
+    def transform(
+        self, text: str, instruction: str, language: str, timeout: float | None = None
+    ) -> tuple[str, bool]:
         """Rewrite `text` per `instruction` (e.g. 'Make it more professional').
         Returns (result, ok); on failure returns the original text and False."""
         messages = [
@@ -213,7 +254,7 @@ class _BaseCleaner:
         ]
         try:
             # rewrites can be longer than dictations — give the model more room
-            out = self._send(messages, language, timeout=max(self.timeout_s, 45.0))
+            out = self._send(messages, language, timeout=timeout or max(self.timeout_s, 45.0))
             if not out:
                 return text, False
             return out, True

@@ -9,6 +9,8 @@ from .config import Config
 from .hotkey import CapsLockHook
 from .orchestrator import Orchestrator
 from .ui import theme
+from . import inserter
+from .ui.clipboard_popup import ClipboardPopup, ResultViewer
 from .ui.main_window import MainWindow
 from .ui.overlay import Overlay
 from .ui.rewrite_popup import RewritePopup
@@ -40,6 +42,15 @@ class FlowLocalApp:
         self.orch.rewrite_ready.connect(self.rewrite_popup.show_at_cursor)
         self.rewrite_popup.style_chosen.connect(self.orch.choose_rewrite_style)
         self.rewrite_popup.dismissed.connect(self.orch.cancel_rewrite)
+
+        # clipboard AI: react to copies the USER makes, never to our own ops
+        self.clip_popup = ClipboardPopup()
+        self.result_viewer = ResultViewer()
+        self._last_clip = ""
+        self.clip_popup.action_chosen.connect(self.orch.run_clipboard_action)
+        self.orch.clipboard_result.connect(self.result_viewer.present)
+        if self.cfg.clipboard_ai_enabled:
+            self.qt.clipboard().dataChanged.connect(self._clipboard_changed)
 
         # app icon (window title bar, taskbar) — also used by the desktop shortcut
         from .startup import app_icon_path, write_app_icon
@@ -87,6 +98,28 @@ class FlowLocalApp:
         self.hook.stop()  # CapsLock behaves normally again after quit
         self.orch.shutdown()
         return rc
+
+    # -- clipboard AI ----------------------------------------------------------
+    def _clipboard_changed(self) -> None:
+        import time
+
+        from PySide6.QtGui import QGuiApplication
+
+        from .clipboard_ai import MAX_CHARS, MIN_CHARS
+
+        if time.monotonic() < inserter.suppress_until:
+            return  # our own paste/capture/restore
+        if QGuiApplication.focusWindow() is not None:
+            return  # copy made inside FlowLocal's own windows
+        if self.orch.state != "IDLE":
+            return
+        text = self.qt.clipboard().text()
+        if not text or not (MIN_CHARS <= len(text) <= MAX_CHARS):
+            return
+        if text == self._last_clip:
+            return  # same content copied again — don't nag
+        self._last_clip = text
+        self.clip_popup.offer(text)
 
     # -- tray actions --------------------------------------------------------
     def _tray_activated(self, reason) -> None:

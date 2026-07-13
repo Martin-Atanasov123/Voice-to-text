@@ -11,6 +11,16 @@ import win32con
 
 user32 = ctypes.windll.user32
 
+# While > monotonic(), clipboard changes are OURS — the Clipboard AI popup must
+# not react to pastes/captures/restores this module performs.
+suppress_until: float = 0.0
+
+
+def _suppress(seconds: float = 2.0) -> None:
+    global suppress_until
+    suppress_until = time.monotonic() + seconds
+
+
 VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN = 0x10, 0x11, 0x12, 0x5B, 0x5C
 KEYEVENTF_KEYUP = 0x0002
 INPUT_KEYBOARD = 1
@@ -72,6 +82,7 @@ def _get_clipboard_text() -> str | None:
 
 
 def _set_clipboard_text(text: str) -> bool:
+    _suppress()
     if not _open_clipboard_retry():
         return False
     try:
@@ -90,6 +101,7 @@ def capture_selection() -> tuple[str | None, str | None]:
     responsible for eventually restoring saved_clipboard.
     """
     _wait_modifiers_released()
+    _suppress(3.0)  # the Ctrl+C below is ours, not a user copy
     saved = _get_clipboard_text()
     _set_clipboard_text("")  # sentinel: unchanged means no selection
     _send_key(VK_CONTROL)

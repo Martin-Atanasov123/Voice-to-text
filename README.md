@@ -14,6 +14,12 @@ or double-click `run_flowlocal.pyw` (no console window). The tray icon turns **b
 - **Select text anywhere + press Ctrl+CapsLock** → a popup offers Professional / Friendly /
   Shorter / Longer / Email / Fix grammar — the rewritten text replaces your selection.
   Works on any text in any app, not just dictations.
+- **Hold Shift+CapsLock and dictate an instruction** (Command Mode): "напиши имейл до
+  наемодателя че наемът ще закъснее" → the requested text itself is written and pasted.
+- **Copy any text (Ctrl+C)** → a small "AI on copied text" popup offers Summarize /
+  Translate BG⇄EN / Explain / Fix grammar; the result opens in a viewer with one-click
+  copy. Ignores tiny copies and everything FlowLocal itself puts on the clipboard.
+  Toggle in Settings → General (restart to apply).
 - **Smart context**: the dictation tone follows the focused app automatically — casual in
   Discord/Slack/Viber, polite email prose in Outlook, terse technical text in VS Code/
   terminals, polished prose in Word. Toggle in Settings → General.

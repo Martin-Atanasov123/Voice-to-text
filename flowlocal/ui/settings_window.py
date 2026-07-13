@@ -156,6 +156,10 @@ class SettingsWindow(QWidget):
             "Smart context — tone follows the app (chat casual, email polite, code technical)"
         )
         self._smart_context.setChecked(cfg.smart_context_enabled)
+        self._clipboard_ai = QCheckBox(
+            "Clipboard AI — offer Summarize/Translate/Explain after you copy text (restart to apply)"
+        )
+        self._clipboard_ai.setChecked(cfg.clipboard_ai_enabled)
         self._profile = QComboBox()
         self._profile.addItems(["general", "developer", "student"])
         self._profile.setCurrentText(cfg.profile)
@@ -172,6 +176,7 @@ class SettingsWindow(QWidget):
         form.addRow("Cleanup timeout:", self._timeout)
         form.addRow(self._autostart)
         form.addRow(self._smart_context)
+        form.addRow(self._clipboard_ai)
         form.addRow("Profile:", self._profile)
         form.addRow("Your style sample:", self._style)
         w = QWidget()
@@ -287,6 +292,7 @@ class SettingsWindow(QWidget):
         cfg.cleanup_enabled = self._cleanup.isChecked()
         cfg.cleanup_timeout_s = self._timeout.value()
         cfg.smart_context_enabled = self._smart_context.isChecked()
+        cfg.clipboard_ai_enabled = self._clipboard_ai.isChecked()
         cfg.profile = self._profile.currentText()
         cfg.style_sample = self._style.toPlainText().strip()
         cfg.whisper_model = self._model.currentText()

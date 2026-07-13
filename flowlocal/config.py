@@ -34,6 +34,8 @@ class Config:
     smart_context_enabled: bool = True     # tone follows the focused app
     profile: str = "general"               # general | developer | student
     style_sample: str = ""                 # short sample of the user's writing style
+    # v1.4: clipboard AI popup after every copy (Summarize/Translate/Explain/Grammar)
+    clipboard_ai_enabled: bool = True
     cleanup_enabled: bool = True
     cleanup_timeout_s: float = 20.0
     tap_threshold_s: float = 0.3

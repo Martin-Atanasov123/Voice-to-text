@@ -52,7 +52,7 @@ def main():
     jobs: queue.Queue = queue.Queue(maxsize=1)
     ctx = {}
 
-    def on_press():
+    def on_press(command=False):
         if jobs.full():
             print("[busy] dictation in progress — ignored", flush=True)
             return

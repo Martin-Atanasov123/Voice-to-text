@@ -21,6 +21,7 @@ kernel32 = ctypes.windll.kernel32
 WH_KEYBOARD_LL = 13
 VK_CAPITAL = 0x14
 VK_CONTROL = 0x11
+VK_SHIFT = 0x10
 WM_KEYDOWN = 0x0100
 WM_KEYUP = 0x0101
 WM_SYSKEYDOWN = 0x0104
@@ -50,11 +51,16 @@ user32.CallNextHookEx.argtypes = (wt.HHOOK, ctypes.c_int, wt.WPARAM, wt.LPARAM)
 
 
 class CapsLockHook(threading.Thread):
-    """on_press() fires at key-down; on_release(held) or on_tap() at key-up."""
+    """CapsLock is fully hijacked. Gestures:
+    - hold CapsLock            -> on_press(command=False) … on_release(held)
+    - hold Shift+CapsLock      -> on_press(command=True)  … on_release(held)
+    - Ctrl+CapsLock            -> on_combo() (rewrite selection)
+    - tap (<threshold)         -> on_tap()
+    """
 
     def __init__(
         self,
-        on_press: Callable[[], None],
+        on_press: Callable[[bool], None],
         on_release: Callable[[float], None],
         on_tap: Callable[[], None] | None = None,
         tap_threshold_s: float = 0.3,
@@ -89,7 +95,9 @@ class CapsLockHook(threading.Thread):
                             if self._is_combo:
                                 self.on_combo()
                             else:
-                                self.on_press()
+                                # Shift held -> command mode (dictate an instruction)
+                                command = bool(user32.GetAsyncKeyState(VK_SHIFT) & 0x8000)
+                                self.on_press(command)
                         except Exception:
                             pass
                     return 1  # suppress toggle
