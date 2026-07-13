@@ -118,9 +118,9 @@ FEW_SHOT = {
 }
 
 
-def make_messages(text: str, language: str) -> list[dict]:
+def make_messages(text: str, language: str, extra_system: str = "") -> list[dict]:
     lang = language if language in PROMPTS else "en"
-    messages = [{"role": "system", "content": PROMPTS[lang]}]
+    messages = [{"role": "system", "content": PROMPTS[lang] + extra_system}]
     for raw, cleaned in FEW_SHOT[lang]:
         messages.append({"role": "user", "content": raw})
         messages.append({"role": "assistant", "content": cleaned})
@@ -141,7 +141,7 @@ def _http_json(url: str, payload: dict | None, timeout: float, headers: dict | N
 class _BaseCleaner:
     timeout_s: float = 20.0
 
-    def _chat(self, text: str, language: str, timeout: float) -> str:
+    def _chat(self, text: str, language: str, timeout: float, extra_system: str = "") -> str:
         raise NotImplementedError
 
     def health_check(self) -> bool:
@@ -150,9 +150,9 @@ class _BaseCleaner:
     def warm_up(self) -> None:
         pass
 
-    def clean(self, raw: str, language: str) -> tuple[str, bool]:
+    def clean(self, raw: str, language: str, extra_system: str = "") -> tuple[str, bool]:
         try:
-            cleaned = self._chat(raw, language, timeout=self.timeout_s)
+            cleaned = self._chat(raw, language, timeout=self.timeout_s, extra_system=extra_system)
             # Guard against a chatty/broken model reply: if the output is empty or
             # wildly longer than the input, the raw transcript is safer.
             if not cleaned or len(cleaned) > max(200, len(raw) * 3):
@@ -188,12 +188,12 @@ class OllamaCleaner(_BaseCleaner):
             except Exception as e:
                 log.warning("Ollama warm-up (%s) failed: %s", lang, e)
 
-    def _chat(self, text: str, language: str, timeout: float) -> str:
+    def _chat(self, text: str, language: str, timeout: float, extra_system: str = "") -> str:
         data = _http_json(
             self.base + "/api/chat",
             {
                 "model": self.models.get(language, self.models["en"]),
-                "messages": make_messages(text, language),
+                "messages": make_messages(text, language, extra_system),
                 "stream": False,
                 "keep_alive": "30m",
                 # num_gpu=0: whisper owns the 4GB GPU; the LLM runs on CPU
@@ -226,12 +226,12 @@ class ApiCleaner(_BaseCleaner):
         except (urllib.error.URLError, OSError, urllib.error.HTTPError):
             return False
 
-    def _chat(self, text: str, language: str, timeout: float) -> str:
+    def _chat(self, text: str, language: str, timeout: float, extra_system: str = "") -> str:
         data = _http_json(
             self.base + "/chat/completions",
             {
                 "model": self.model,
-                "messages": make_messages(text, language),
+                "messages": make_messages(text, language, extra_system),
                 "temperature": 0.2,
             },
             timeout=timeout,

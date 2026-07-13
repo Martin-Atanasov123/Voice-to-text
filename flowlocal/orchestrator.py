@@ -23,6 +23,7 @@ from .config import Config
 from .history import History
 from .inserter import insert_text
 from .layout import get_dictation_language
+from .personal import Dictionary, Snippets
 from .stt import Transcriber
 
 log = logging.getLogger(__name__)
@@ -61,6 +62,8 @@ class Orchestrator(QObject):
         self.stt = Transcriber(cfg.whisper_model, cfg.whisper_device, cfg.whisper_model_hq, cfg.beam_size)
         self.cleaner = create_cleaner(cfg)
         self.history = History()
+        self.dictionary = Dictionary()
+        self.snippets = Snippets()
         self.ollama_ok = False
         self._cmds: queue.Queue = queue.Queue()
         self._worker = threading.Thread(target=self._run, name="pipeline", daemon=True)
@@ -185,21 +188,25 @@ class Orchestrator(QObject):
             return
 
         self._set_state("TRANSCRIBING", f"{audio.size / 16000:.0f}s of speech")
-        raw = self.stt.transcribe(audio, lang)
+        raw = self.stt.transcribe(audio, lang, hotwords=self.dictionary.hotwords())
         if not raw:
             self._flash("WARNING", "didn't catch that")
             self._set_state("IDLE", "")
             return
 
-        text, status = raw, "cleanup_off"
-        if self.cfg.cleanup_enabled:
-            self._set_state("CLEANING", "")
-            cleaned, ok = self.cleaner.clean(raw, lang)
-            if ok:
-                text, status = cleaned, "cleaned"
-            else:
-                status = "raw_fallback"
-                self._flash("WARNING", "cleanup failed — pasting raw text")
+        snippet = self.snippets.match(raw)
+        if snippet is not None:
+            text, status = snippet, "snippet"
+        else:
+            text, status = raw, "cleanup_off"
+            if self.cfg.cleanup_enabled:
+                self._set_state("CLEANING", "")
+                cleaned, ok = self.cleaner.clean(raw, lang, self.dictionary.prompt_clause(lang))
+                if ok:
+                    text, status = cleaned, "cleaned"
+                else:
+                    status = "raw_fallback"
+                    self._flash("WARNING", "cleanup failed — pasting raw text")
 
         self._set_state("PASTING", "")
         try:
@@ -212,7 +219,7 @@ class Orchestrator(QObject):
         self.history.add(
             language=lang,
             raw_text=raw,
-            cleaned_text=text if status == "cleaned" else None,
+            cleaned_text=text if status in ("cleaned", "snippet") else None,
             target_app=self._ctx.get("app", "?"),
             duration_ms=int((time.monotonic() - t0) * 1000),
             status=status,

@@ -1,15 +1,16 @@
-"""Application wiring: QApplication + orchestrator + hook + tray + overlay."""
+"""Application wiring: QApplication + orchestrator + hook + tray + overlay + main window."""
 import logging
 import sys
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from .config import Config
 from .hotkey import CapsLockHook
 from .orchestrator import Orchestrator
-from .ui.history_window import HistoryWindow
+from .ui import theme
+from .ui.main_window import MainWindow
 from .ui.overlay import Overlay
-from .ui.settings_window import SettingsWindow
 from .ui.tray import Tray
 
 log = logging.getLogger(__name__)
@@ -20,22 +21,32 @@ class FlowLocalApp:
         self.qt = QApplication(argv)
         self.qt.setQuitOnLastWindowClosed(False)
         self.qt.setApplicationName("FlowLocal")
+        self.qt.setStyleSheet(theme.QSS)
 
         self.cfg = Config.load()
         self.orch = Orchestrator(self.cfg)
         self.overlay = Overlay()
+        self.window = MainWindow(self.cfg, self.orch)
         self.tray = Tray(
             on_pause=self._toggle_pause,
-            on_settings=self._show_settings,
-            on_history=self._show_history,
+            on_settings=lambda: self.window.open_page(MainWindow.PAGE_SETTINGS),
+            on_history=lambda: self.window.open_page(MainWindow.PAGE_HISTORY),
             on_quit=self.quit,
         )
-        self._settings_win: SettingsWindow | None = None
-        self._history_win: HistoryWindow | None = None
+        self.tray.activated.connect(self._tray_activated)
+
+        # app icon (window title bar, taskbar) — also used by the desktop shortcut
+        from .startup import app_icon_path, write_app_icon
+
+        icon_file = app_icon_path()
+        if not icon_file.exists():
+            write_app_icon(icon_file)
+        self.qt.setWindowIcon(QIcon(str(icon_file)))
 
         # orchestrator signals arrive queued on the Qt main thread
         self.orch.state_changed.connect(self.overlay.set_state)
         self.orch.state_changed.connect(self.tray.set_state)
+        self.orch.state_changed.connect(self.window.set_state)
         self.orch.state_changed.connect(lambda s, d: log.info("state: %s %s", s, d))
 
         self.hook = CapsLockHook(
@@ -56,7 +67,7 @@ class FlowLocalApp:
                 "Start Ollama (or install from ollama.com) for AI cleanup."
                 if self.cfg.cleanup_backend == "ollama"
                 else "Cleanup API is unreachable — dictations will paste raw text.\n"
-                "Check the API settings in the Models dashboard."
+                "Check the API settings in Settings → Models & AI."
             )
             self.tray.showMessage("FlowLocal", msg, QSystemTrayIcon.Warning, 8000)
         self.orch.start()
@@ -71,41 +82,31 @@ class FlowLocalApp:
         return rc
 
     # -- tray actions --------------------------------------------------------
+    def _tray_activated(self, reason) -> None:
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            self.window.open_page(MainWindow.PAGE_OVERVIEW)
+
     def _toggle_pause(self) -> None:
         paused = self.orch.toggle_pause()
         # while paused, CapsLock passes through and works as a normal key
         self.hook.enabled = not paused
-
-    def _show_settings(self) -> None:
-        if self._settings_win is None:
-            self._settings_win = SettingsWindow(self.cfg)
-        self._settings_win.show()
-        self._settings_win.raise_()
-        self._settings_win.activateWindow()
-
-    def _show_history(self) -> None:
-        if self._history_win is None:
-            self._history_win = HistoryWindow(self.orch.history)
-        self._history_win.refresh()
-        self._history_win.show()
-        self._history_win.raise_()
-        self._history_win.activateWindow()
 
     def quit(self) -> None:
         self.qt.quit()
 
 
 def main() -> int:
-    from .startup import acquire_single_instance, set_autostart
+    from .startup import acquire_single_instance, create_desktop_shortcut, set_autostart
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     if not acquire_single_instance():
         print("FlowLocal is already running (check the system tray).")
         return 0
     app = FlowLocalApp(sys.argv)
-    if app.cfg.autostart:
-        try:
-            set_autostart(True)  # idempotent: refreshes the startup shortcut
-        except Exception as e:
-            log.warning("Could not create startup shortcut: %s", e)
+    try:
+        create_desktop_shortcut()  # idempotent: keeps the Desktop icon fresh
+        if app.cfg.autostart:
+            set_autostart(True)
+    except Exception as e:
+        log.warning("Shortcut creation failed: %s", e)
     return app.run()

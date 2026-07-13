@@ -120,13 +120,12 @@ class SettingsWindow(QWidget):
         note.setStyleSheet("color: gray;")
 
         save = QPushButton("Save")
+        save.setObjectName("Primary")
         save.clicked.connect(self._save)
-        close = QPushButton("Close")
-        close.clicked.connect(self.close)
+        self._saved_note = QLabel("")
         btns = QHBoxLayout()
-        btns.addStretch(1)
+        btns.addWidget(self._saved_note, 1)
         btns.addWidget(save)
-        btns.addWidget(close)
 
         lay = QVBoxLayout(self)
         lay.addWidget(tabs)
@@ -284,4 +283,6 @@ class SettingsWindow(QWidget):
             from ..startup import set_autostart
 
             set_autostart(cfg.autostart)
-        self.close()
+        self._saved_note.setText(
+            "Saved. Speech model / backend changes apply after restarting FlowLocal."
+        )

@@ -74,11 +74,11 @@ class Transcriber:
                 last_err = e
         raise RuntimeError(f"Could not load any whisper model: {last_err}")
 
-    def transcribe(self, audio: np.ndarray, language: str) -> str:
+    def transcribe(self, audio: np.ndarray, language: str, hotwords: str | None = None) -> str:
         if self.model is None:
             self.load()
         try:
-            return self._run(audio, language)
+            return self._run(audio, language, hotwords)
         except Exception as e:
             # GPU state can degrade after load (VRAM stolen) — retreat to small/cpu
             log.warning("Transcribe failed on %s: %s — retrying on cpu", self.active, e)
@@ -86,10 +86,11 @@ class Transcriber:
 
             self.model = WhisperModel(self.model_name, device="cpu", compute_type="int8")
             self.active = (self.model_name, "cpu")
-            return self._run(audio, language)
+            return self._run(audio, language, hotwords)
 
-    def _run(self, audio: np.ndarray, language: str) -> str:
+    def _run(self, audio: np.ndarray, language: str, hotwords: str | None) -> str:
         segments, _info = self.model.transcribe(
-            audio, language=language, beam_size=self.beam_size, vad_filter=True
+            audio, language=language, beam_size=self.beam_size, vad_filter=True,
+            hotwords=hotwords,
         )
         return " ".join(s.text.strip() for s in segments).strip()
