@@ -18,7 +18,7 @@ import time
 from PySide6.QtCore import QObject, Signal
 
 from .audio import Recorder
-from .cleanup import OllamaCleaner
+from .cleanup import create_cleaner
 from .config import Config
 from .history import History
 from .inserter import insert_text
@@ -59,11 +59,7 @@ class Orchestrator(QObject):
         self._state_lock = threading.Lock()
         self.recorder = Recorder(cfg.mic_device, cfg.max_record_s)
         self.stt = Transcriber(cfg.whisper_model, cfg.whisper_device, cfg.whisper_model_hq, cfg.beam_size)
-        self.cleaner = OllamaCleaner(
-            cfg.ollama_url,
-            {"en": cfg.ollama_model_en, "bg": cfg.ollama_model_bg},
-            cfg.cleanup_timeout_s,
-        )
+        self.cleaner = create_cleaner(cfg)
         self.history = History()
         self.ollama_ok = False
         self._cmds: queue.Queue = queue.Queue()
@@ -88,7 +84,7 @@ class Orchestrator(QObject):
             self.cleaner.warm_up()
         detail = f"whisper {self.stt.active[0]}/{self.stt.active[1]}"
         if self.cfg.cleanup_enabled and not self.ollama_ok:
-            detail += " — Ollama not running, will paste raw text"
+            detail += " — cleanup unavailable, will paste raw text"
         self._set_state("IDLE", detail)
 
     def shutdown(self) -> None:

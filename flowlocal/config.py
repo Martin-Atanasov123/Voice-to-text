@@ -24,6 +24,12 @@ class Config:
     # mangles Bulgarian; qwen3:4b handles BG correctly (slower on CPU).
     ollama_model_en: str = "qwen2.5:3b-instruct"
     ollama_model_bg: str = "qwen3:4b-instruct-2507-q4_K_M"
+    # Cleanup backend: "ollama" (local) or "api" (any OpenAI-compatible endpoint).
+    # api_key lives in config.json in %APPDATA% — local file, plain text.
+    cleanup_backend: str = "ollama"
+    api_base_url: str = "https://api.openai.com/v1"
+    api_key: str = ""
+    api_model: str = "gpt-4o-mini"
     cleanup_enabled: bool = True
     cleanup_timeout_s: float = 20.0
     tap_threshold_s: float = 0.3

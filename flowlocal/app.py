@@ -51,13 +51,14 @@ class FlowLocalApp:
             return 1
         self.tray.show()
         if self.cfg.cleanup_enabled and not self.orch.cleaner.health_check():
-            self.tray.showMessage(
-                "FlowLocal",
+            msg = (
                 "Ollama is not running — dictations will paste raw text.\n"
-                "Start Ollama (or install from ollama.com) for AI cleanup.",
-                QSystemTrayIcon.Warning,
-                8000,
+                "Start Ollama (or install from ollama.com) for AI cleanup."
+                if self.cfg.cleanup_backend == "ollama"
+                else "Cleanup API is unreachable — dictations will paste raw text.\n"
+                "Check the API settings in the Models dashboard."
             )
+            self.tray.showMessage("FlowLocal", msg, QSystemTrayIcon.Warning, 8000)
         self.orch.start()
         try:
             self.hook.start()
