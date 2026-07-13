@@ -40,6 +40,13 @@ class Config:
     cleanup_timeout_s: float = 20.0
     tap_threshold_s: float = 0.3
     max_record_s: float = 120.0
+    # Hotkeys — defaults preserved here so "Reset to defaults" always works
+    # even after the user changes them: CapsLock hold / Ctrl+ / Shift+.
+    ptt_vk: int = 0x14              # CapsLock
+    ptt_extended: bool = False
+    ptt_label: str = "Caps Lock"
+    rewrite_modifier: str = "ctrl"
+    command_modifier: str = "shift"
     autostart: bool = True
     overlay_position: str = "bottom-center"
 

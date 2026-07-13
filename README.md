@@ -25,6 +25,11 @@ or double-click `run_flowlocal.pyw` (no console window). The tray icon turns **b
   terminals, polished prose in Word. Toggle in Settings → General.
 - **Profiles & your style**: pick a profile (developer/student) and optionally paste a short
   sample of your own writing — cleanup leans toward your tone.
+- **Custom hotkeys**: Settings → Hotkeys lets you rebind the push-to-talk key (CapsLock by
+  default) to Right Ctrl/Alt/Shift/Win, Scroll Lock, Pause/Break, or any key you press via
+  "Capture a different key…". The Rewrite and Command modifiers (Ctrl/Shift by default) are
+  independently configurable too. "Reset to defaults" always restores CapsLock/Ctrl/Shift.
+  Takes effect after restarting FlowLocal.
 - Language: Windows keyboard layout at the moment you press (EN layout → English, BG layout → Bulgarian).
 - Snippets support `{{date}}`, `{{time}}`, `{{day}}` placeholders, filled at paste time.
 - If Ollama isn't running, dictations still work — raw transcript is pasted.

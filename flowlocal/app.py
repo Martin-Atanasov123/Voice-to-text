@@ -8,7 +8,8 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from .config import Config
-from .hotkey import CapsLockHook
+from .hotkey import PTTHook
+from .keymap import MODIFIER_VK
 from .orchestrator import Orchestrator
 from .ui import theme
 from . import inserter
@@ -59,7 +60,22 @@ class FlowLocalApp:
         self.cfg = Config.load()
         self.orch = Orchestrator(self.cfg)
         self.overlay = Overlay()
-        self.window = MainWindow(self.cfg, self.orch)
+
+        # hook is built before the window: the Hotkeys settings page needs a
+        # live reference to capture new keys (see begin_capture in hotkey.py)
+        self.hook = PTTHook(
+            on_press=self.orch.on_press,
+            on_release=self.orch.on_release,
+            on_tap=self.orch.on_tap,
+            tap_threshold_s=self.cfg.tap_threshold_s,
+            on_combo=self.orch.on_combo,
+            primary_vk=self.cfg.ptt_vk,
+            primary_extended=self.cfg.ptt_extended,
+            rewrite_modifier_vk=MODIFIER_VK.get(self.cfg.rewrite_modifier, MODIFIER_VK["ctrl"]),
+            command_modifier_vk=MODIFIER_VK.get(self.cfg.command_modifier, MODIFIER_VK["shift"]),
+        )
+
+        self.window = MainWindow(self.cfg, self.orch, capture_key_fn=self.hook.begin_capture)
         self.tray = Tray(
             on_pause=self._toggle_pause,
             on_settings=lambda: self.window.open_page(MainWindow.PAGE_SETTINGS),
@@ -95,14 +111,6 @@ class FlowLocalApp:
         self.orch.state_changed.connect(self.tray.set_state)
         self.orch.state_changed.connect(self.window.set_state)
         self.orch.state_changed.connect(lambda s, d: log.info("state: %s %s", s, d))
-
-        self.hook = CapsLockHook(
-            on_press=self.orch.on_press,
-            on_release=self.orch.on_release,
-            on_tap=self.orch.on_tap,
-            tap_threshold_s=self.cfg.tap_threshold_s,
-            on_combo=self.orch.on_combo,
-        )
 
     def run(self) -> int:
         if not QSystemTrayIcon.isSystemTrayAvailable():

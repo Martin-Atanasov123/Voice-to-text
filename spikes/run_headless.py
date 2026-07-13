@@ -19,7 +19,7 @@ setup_cuda_dlls()
 from flowlocal.audio import Recorder
 from flowlocal.cleanup import OllamaCleaner
 from flowlocal.config import Config
-from flowlocal.hotkey import CapsLockHook
+from flowlocal.hotkey import PTTHook
 from flowlocal.inserter import insert_text
 from flowlocal.layout import get_dictation_language
 from flowlocal.stt import Transcriber
@@ -70,7 +70,7 @@ def main():
     def on_tap():
         recorder.stop()  # tap started the stream on press; discard it
 
-    hook = CapsLockHook(on_press, on_release, on_tap, cfg.tap_threshold_s)
+    hook = PTTHook(on_press, on_release, on_tap, cfg.tap_threshold_s)
     hook.start()
     print("Hold CapsLock and speak. Ctrl+C to quit.", flush=True)
 

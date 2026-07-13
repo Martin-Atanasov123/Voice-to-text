@@ -245,7 +245,7 @@ class SnippetsPage(QWidget):
 class MainWindow(QWidget):
     PAGE_OVERVIEW, PAGE_HISTORY, PAGE_DICTIONARY, PAGE_SNIPPETS, PAGE_SETTINGS = range(5)
 
-    def __init__(self, cfg: Config, orch):
+    def __init__(self, cfg: Config, orch, capture_key_fn=None):
         super().__init__()
         self.setObjectName("Root")
         self.setWindowTitle("FlowLocal")
@@ -276,7 +276,7 @@ class MainWindow(QWidget):
         self.history_page = HistoryWindow(orch.history)
         self.dictionary_page = DictionaryPage(orch.dictionary)
         self.snippets_page = SnippetsPage(orch.snippets)
-        self.settings_page = SettingsWindow(cfg)
+        self.settings_page = SettingsWindow(cfg, capture_key_fn=capture_key_fn)
 
         self._pages = QStackedWidget()
         for page in (self.overview, self.history_page, self.dictionary_page,

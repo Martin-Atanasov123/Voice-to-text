@@ -28,9 +28,19 @@ from PySide6.QtWidgets import (
 
 from ..cleanup import ApiCleaner, OllamaCleaner, list_ollama_models
 from ..config import Config
+from .. import keymap
 
 WHISPER_MODELS = ["small", "medium", "large-v3-turbo"]
 DEVICES = ["auto", "cuda", "cpu"]
+
+def _encode_key(vk: int, extended: bool) -> str:
+    return f"{vk}:{int(extended)}"
+
+
+def _decode_key(s: str) -> tuple[int, bool]:
+    vk, ext = s.split(":")
+    return int(vk), bool(int(ext))
+
 
 # Ollama models worth suggesting for cleanup, by minimum system profile
 RECOMMENDED_PULLS = [
@@ -106,17 +116,26 @@ class _TestRunner(QObject):
 
 
 class SettingsWindow(QWidget):
-    def __init__(self, cfg: Config):
+    # emitted from the hook's own thread when a key-capture completes;
+    # Qt auto-queues delivery of _capture_finished onto this widget's thread
+    key_captured = Signal(object, bool)
+
+    def __init__(self, cfg: Config, capture_key_fn=None):
         super().__init__()
         self.cfg = cfg
+        self._capture_key_fn = capture_key_fn
+        self.key_captured.connect(self._capture_finished)
         self.setWindowTitle("FlowLocal — Settings")
         self.resize(640, 560)
 
         tabs = QTabWidget()
         tabs.addTab(self._general_tab(), "General")
         tabs.addTab(self._models_tab(), "Models && AI")
+        tabs.addTab(self._hotkeys_tab(), "Hotkeys")
 
-        note = QLabel("Speech model, device and backend changes take effect after restarting FlowLocal.")
+        note = QLabel(
+            "Speech model, device, backend and hotkey changes take effect after restarting FlowLocal."
+        )
         note.setWordWrap(True)
         note.setStyleSheet("color: gray;")
 
@@ -277,6 +296,127 @@ class SettingsWindow(QWidget):
         lay.addStretch(1)
         return w
 
+    # -- Hotkeys tab -----------------------------------------------------------
+    # itemData is stored as a "vk:extended" STRING, never a raw tuple: PySide6's
+    # QComboBox.findData() compares opaque Python objects by identity, not
+    # value, so two equal-but-distinct tuples never match — strings compare
+    # correctly (verified: the string-keyed modifier combos below never had
+    # this problem).
+    def _hotkeys_tab(self) -> QWidget:
+        cfg = self.cfg
+
+        self._ptt_combo = QComboBox()
+        for vk, ext in keymap.RECOMMENDED_PTT_KEYS:
+            self._ptt_combo.addItem(keymap.key_name(vk, ext), _encode_key(vk, ext))
+        current = _encode_key(cfg.ptt_vk, cfg.ptt_extended)
+        idx = self._ptt_combo.findData(current)
+        if idx < 0:
+            self._ptt_combo.addItem(f"Custom: {cfg.ptt_label}", current)
+            idx = self._ptt_combo.count() - 1
+        self._ptt_combo.setCurrentIndex(idx)
+
+        self._ptt_capture_btn = QPushButton("Capture a different key…")
+        self._ptt_capture_btn.clicked.connect(self._start_capture)
+        self._ptt_status = QLabel("")
+        self._ptt_status.setStyleSheet("color: gray;")
+
+        ptt_row = QHBoxLayout()
+        ptt_row.addWidget(self._ptt_combo, 1)
+        ptt_row.addWidget(self._ptt_capture_btn)
+
+        self._rewrite_mod = QComboBox()
+        self._command_mod = QComboBox()
+        for key, label in keymap.MODIFIER_CHOICES:
+            self._rewrite_mod.addItem(label, key)
+            self._command_mod.addItem(label, key)
+        self._rewrite_mod.setCurrentIndex(self._rewrite_mod.findData(cfg.rewrite_modifier))
+        self._command_mod.setCurrentIndex(self._command_mod.findData(cfg.command_modifier))
+
+        self._hotkey_warning = QLabel("")
+        self._hotkey_warning.setWordWrap(True)
+        self._hotkey_warning.setStyleSheet("color: #E0703A;")
+
+        reset = QPushButton("Reset to defaults (Caps Lock / Ctrl / Shift)")
+        reset.clicked.connect(self._reset_hotkeys)
+
+        hint = QLabel(
+            "Hold the push-to-talk key to dictate. Hold it together with the Rewrite "
+            "modifier over selected text to rewrite it; together with the Command "
+            "modifier to dictate an instruction instead of text."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: gray;")
+
+        form = QFormLayout()
+        form.addRow(hint)
+        form.addRow("Push-to-talk key:", ptt_row)
+        form.addRow("", self._ptt_status)
+        form.addRow("Rewrite modifier:", self._rewrite_mod)
+        form.addRow("Command modifier:", self._command_mod)
+        form.addRow(self._hotkey_warning)
+        form.addRow(reset)
+
+        for combo in (self._ptt_combo, self._rewrite_mod, self._command_mod):
+            combo.currentIndexChanged.connect(self._check_hotkey_conflicts)
+        self._check_hotkey_conflicts()
+
+        w = QWidget()
+        w.setLayout(form)
+        return w
+
+    def _start_capture(self) -> None:
+        if self._capture_key_fn is None:
+            self._ptt_status.setText("Capture unavailable — restart FlowLocal and try again.")
+            return
+        self._ptt_capture_btn.setEnabled(False)
+        self._ptt_status.setText("Press any key… (Esc to cancel)")
+        # the hook calls this back on ITS OWN thread; key_captured.emit() marshals
+        # it onto the Qt main thread automatically (cross-thread signal emit)
+        self._capture_key_fn(lambda vk, ext: self.key_captured.emit(vk, ext))
+
+    def _capture_finished(self, vk, extended: bool) -> None:
+        self._ptt_capture_btn.setEnabled(True)
+        if vk is None:
+            self._ptt_status.setText("Cancelled.")
+            return
+        vk = int(vk)
+        label = keymap.key_name(vk, extended)
+        key = _encode_key(vk, extended)
+        idx = self._ptt_combo.findData(key)
+        if idx < 0:
+            # replace any previous "Custom" entry rather than piling up
+            last = self._ptt_combo.count() - 1
+            if last >= len(keymap.RECOMMENDED_PTT_KEYS):
+                self._ptt_combo.removeItem(last)
+            self._ptt_combo.addItem(f"Custom: {label}", key)
+            idx = self._ptt_combo.count() - 1
+        self._ptt_combo.setCurrentIndex(idx)
+        self._ptt_status.setText(f"Captured: {label}")
+
+    def _check_hotkey_conflicts(self) -> None:
+        vk, _ext = _decode_key(self._ptt_combo.currentData())
+        primary_family = keymap.key_family(vk)
+        rw = self._rewrite_mod.currentData()
+        cmd = self._command_mod.currentData()
+        problems = []
+        if primary_family is not None and primary_family == rw:
+            problems.append(f"Push-to-talk key conflicts with the Rewrite modifier ({rw}).")
+        if primary_family is not None and primary_family == cmd:
+            problems.append(f"Push-to-talk key conflicts with the Command modifier ({cmd}).")
+        if rw == cmd:
+            problems.append("Rewrite and Command modifiers must be different.")
+        self._hotkey_warning.setText("  •  ".join(problems))
+
+    def _reset_hotkeys(self) -> None:
+        self._ptt_combo.setCurrentIndex(self._ptt_combo.findData(_encode_key(*keymap.DEFAULT_PTT)))
+        self._rewrite_mod.setCurrentIndex(
+            self._rewrite_mod.findData(keymap.DEFAULT_REWRITE_MODIFIER)
+        )
+        self._command_mod.setCurrentIndex(
+            self._command_mod.findData(keymap.DEFAULT_COMMAND_MODIFIER)
+        )
+        self._ptt_status.setText("Reset to defaults.")
+
     def _test_backend(self) -> None:
         self._test_result.setText("testing…")
         if self._backend_api.isChecked():
@@ -287,7 +427,19 @@ class SettingsWindow(QWidget):
             self._runner.run(lambda: OllamaCleaner(self.cfg.ollama_url, {"en": en, "bg": bg}, 60))
 
     def _save(self) -> None:
+        self._check_hotkey_conflicts()
+        if self._hotkey_warning.text():
+            self._saved_note.setText("Not saved — fix the hotkey conflict below first.")
+            return
+
         cfg = self.cfg
+        vk, ext = _decode_key(self._ptt_combo.currentData())
+        cfg.ptt_vk = vk
+        cfg.ptt_extended = ext
+        cfg.ptt_label = keymap.key_name(vk, ext)
+        cfg.rewrite_modifier = self._rewrite_mod.currentData()
+        cfg.command_modifier = self._command_mod.currentData()
+
         cfg.mic_device = self._mic.currentData()
         cfg.cleanup_enabled = self._cleanup.isChecked()
         cfg.cleanup_timeout_s = self._timeout.value()
