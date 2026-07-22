@@ -61,35 +61,69 @@ comfortably faster than the preview interval, and produces usable text
 
 ## M1 — Partial transcription engine
 
+### Bulgarian preview spike ✅ DONE (2026-07-23) — design is language-dependent
+
+Tested on 3 real recordings from the user's own mic (SAPI has no BG voice). Decisive,
+isolated with a 2×2 test (model size × tail-chunk-vs-full-clip):
+
+| | 3s tail | full clip |
+|---|---|---|
+| `turbo`/cuda (reference) | garbled but real words | good, coherent |
+| `tiny`/cpu | unreadable syllable-soup | **worse** — hallucinates, one clip came back empty, ~9s runtime |
+| `base`/cpu | not tested | close to turbo reference, readable, **1.6–1.8s** |
+| `small`/cpu | not tested | close to turbo reference, readable, **3.7–4.7s** |
+
+Two independent causes, not one:
+- **Chunking hurts even the strong model** — turbo itself degrades on an isolated tail
+  with no preceding context.
+- **`tiny` has a real capability cliff on Bulgarian, independent of chunking** — it gets
+  *worse* with more context (hallucinates), while `turbo` gets much better. `base`
+  crosses whatever capacity threshold `tiny` doesn't.
+
+**Design is therefore language-dependent:**
+- **EN**: `tiny`/cpu, fixed ~3s tail, ~1.2s interval — quality verified good in M0
+  ("hold up well enough to show externally.").
+- **BG**: `base`/cpu, **growing window** (re-transcribe from the start of the recording
+  every pass, not a fixed tail), ~2s interval to match the higher per-pass cost. Cost is
+  expected to plateau the way turbo's did in M0 (~30s window is roughly fixed-cost) but
+  this is inferred from architecture, not directly measured past ~30s — re-check if long
+  BG dictations turn out to be common in practice.
+
+### Implementation
+
 **`flowlocal/audio.py`** — add `snapshot() -> np.ndarray`: concatenate the blocks captured
 so far **without clearing them**. Copy the list reference first (`blocks = self._blocks[:]`)
 so the audio callback can keep appending during the copy; do not take `_lock`, since the
 callback never takes it either.
 
-**`flowlocal/stt.py`** — add a separate `PreviewTranscriber` holding its own
-`WhisperModel("tiny", device="cpu", compute_type="int8")`, with
-`transcribe_partial(audio, language)` calling `transcribe` with `vad_filter=False` (VAD on
-a 2–3s fragment tends to swallow the whole thing — see the `VAD filter removed 00:07.046`
-entries in the log). **No lock is needed anywhere**: preview and final pass use different
-model objects on different devices. Do not add a lock "just in case" — M0 measured the
-locked design at +1.66s.
+**`flowlocal/stt.py`** — add a separate `PreviewTranscriber` holding two CPU models,
+`tiny` and `base`, and picking one per call based on `language`:
+`transcribe_partial(audio, language)`. For EN, pass just the trailing ~3s with
+`vad_filter=False` (VAD on a short fragment tends to swallow the whole thing — see the
+`VAD filter removed 00:07.046` entries in the log). For BG, pass the **full audio
+captured so far** with `vad_filter=False`. **No lock is needed anywhere**: preview and
+final pass use different model objects on different devices. Do not add a lock "just in
+case" — M0 measured the locked shared-model design at +1.66s.
 
 **`flowlocal/orchestrator.py`** —
 - new signal `partial_text = Signal(str)` alongside `state_changed`
 - `_do_start` starts a `preview` thread; `_do_finish`/`_do_cancel` clear a
   `threading.Event` to stop it
-- preview loop: every ~1.2s, `recorder.snapshot()`, transcribe **only the newest ~3s** on
-  the preview model, append to a running preview string, `partial_text.emit(...)`
+- preview loop: interval depends on language (~1.2s EN / ~2s BG, see `config.py` below);
+  `recorder.snapshot()`; call `transcribe_partial`; `partial_text.emit(...)` with the
+  result (replacing the previous preview text for BG's growing window, appending for
+  EN's tail-based approach)
 - `_do_finish` stops the preview thread and runs the existing full-audio `transcribe`
   unchanged — it never waits for preview work
-- load the preview model in `_preload`, after the main model, so a failure there degrades
-  to "no preview" rather than "no dictation"
+- load both preview models in `_preload`, after the main model, so a failure there
+  degrades to "no preview" rather than "no dictation"
 
 The worker thread is free during RECORDING (it blocks on `self._cmds.get()`), so preview
 must run on its own thread — do not reuse the pipeline worker.
 
 **`flowlocal/config.py`** — add `live_preview_enabled: bool = True`,
-`preview_model: str = "tiny"` and `preview_interval_s: float = 1.2`.
+`preview_model_en: str = "tiny"`, `preview_model_bg: str = "base"`,
+`preview_interval_en_s: float = 1.2`, `preview_interval_bg_s: float = 2.0`.
 
 ## M2 — Overlay preview UI
 
@@ -99,8 +133,10 @@ the moment the label holds transcript text.
 
 - store `self._elapsed_text` and `self._preview_text` as separate fields and rebuild the
   label from both, instead of parsing the rendered string
-- add `set_partial(text: str)` slot; keep only the tail (~140 chars) so the pill stays a
-  pill, enable word wrap and cap the width (~520px)
+- add `set_partial(text: str)` slot; it always receives the **full current preview
+  text** (the orchestrator composes it — accumulated tail for EN, full retranscription
+  for BG), never a delta to append. Keep only the tail (~140 chars) for display so the
+  pill stays a pill, enable word wrap and cap the width (~520px)
 - `adjustSize()` + `_position()` on each update so it stays bottom-centred while growing
 - clear preview text on IDLE/ERROR so nothing leaks into the next dictation
 

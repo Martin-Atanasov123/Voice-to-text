@@ -146,9 +146,25 @@ against fresh evidence rather than against that verdict.
    polished final version. Expected to read as "it's still thinking", but worth checking
    against real use — if it reads as "it got it wrong", consider `base` instead.
 
-7. **Bulgarian preview quality is unmeasured.** Windows SAPI has no BG voice, so M0 could
-   only benchmark English. `tiny` is weakest exactly on non-English, and BG is half this
-   user's dictation. Validate with real dictation before committing to `tiny`.
+7. ~~**Bulgarian preview quality is unmeasured.**~~ **RESOLVED (2026-07-23) — and the
+   `tiny` design does NOT work for Bulgarian.** Tested on 3 real recordings from the
+   user's own mic (SAPI has no BG voice, so no synthetic option existed). `tiny` produces
+   unreadable syllable-soup on a 3s tail ("Върдите, върдите, върдите.") and gets **worse,
+   not better**, on the full clip — hallucinating, one recording came back empty, and
+   runtime ballooned to ~9s. `base`/cpu on the FULL clip (not a tail slice) stayed close
+   to the turbo/cuda reference (recognizable, coherent Bulgarian) at 1.6–1.8s per pass.
+
+   Two separate causes, isolated with a 2×2 test (model size × chunk-vs-full):
+   - **Chunking hurts even the strong model**: turbo itself degrades on an isolated 3s
+     tail (no preceding context to disambiguate).
+   - **Model size has a real capability cliff for Bulgarian independent of chunking**:
+     `tiny` does not improve with more context the way `turbo` does — it gets worse.
+
+   Consequence: the preview design must be **language-dependent**. EN can keep the fast
+   `tiny` + fixed tail-chunk design (verified good quality in M0). BG needs `base`/cpu on
+   a **growing window** (re-transcribe from the start of the recording each pass, not a
+   fixed-length tail), at a longer interval (~2s, not 1.2s) to match the higher per-pass
+   cost. See PLAN-v2 M1.
 
 8. **This machine runs out of disk under model load.** Holding several whisper models at
    once during the M0 spike drove Windows to expand the pagefile to ~21GB, leaving 0.22GB
