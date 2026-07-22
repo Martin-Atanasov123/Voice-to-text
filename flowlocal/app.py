@@ -182,10 +182,21 @@ class FlowLocalApp:
                     log.info("Ollama came up automatically")
                     return
                 time.sleep(1)
-            self._ollama_bridge.still_down.emit(
-                "Ollama didn't finish starting — dictations will paste raw text.\n"
-                "Open it manually if this keeps happening."
-            )
+            cleaner = self.orch.cleaner
+            missing = getattr(cleaner, "missing_models", lambda: [])()
+            if missing and getattr(cleaner, "server_reachable", lambda: False)():
+                # the nastier case: server is fine, the models simply aren't there
+                log.warning("Ollama is up but missing models: %s", ", ".join(missing))
+                self._ollama_bridge.still_down.emit(
+                    "Ollama is running but these cleanup models are missing:\n"
+                    f"{', '.join(missing)}\n"
+                    "Dictations will paste raw text until they're installed."
+                )
+            else:
+                self._ollama_bridge.still_down.emit(
+                    "Ollama didn't finish starting — dictations will paste raw text.\n"
+                    "Open it manually if this keeps happening."
+                )
 
         threading.Thread(target=work, daemon=True).start()
 

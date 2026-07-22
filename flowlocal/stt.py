@@ -1,13 +1,18 @@
 """faster-whisper wrapper with a VRAM-aware model chain.
 
-Benchmarks on this machine (GTX 1650, VRAM usually ~80% taken by other apps):
-- large-v3-turbo/cuda with contended VRAM: 44-197s per 11s clip (driver pages
-  weights to system RAM — it "works" but thrashes, so try/except can't catch it;
-  only a free-VRAM probe can)
+Benchmarks on this machine (GTX 1650, 4GB):
+- large-v3-turbo/cuda with ~800MB free (VRAM ~80% taken): 44-197s per 11s clip
+  (driver pages weights to system RAM — it "works" but thrashes, so try/except
+  can't catch it; only a free-VRAM probe can)
 - large-v3-turbo/cpu: ~13s per 11s clip — too slow
-- small/cpu int8 beam1: ~2.6s per 11s clip, same text on test samples
+- small/cpu int8 beam1: ~2.5s per 11s clip
+- large-v3-turbo/cuda with ~2700MB free (re-measured 2026-07-22): loads in 5.6s,
+  occupies only ~1.1GB, and runs 1.7-2.0s per 11s clip — i.e. FASTER than
+  small/cpu, not slower. The old 3000MB gate was set from the thrashing case
+  and turned out to be far too conservative: turbo needs ~1.1GB, so the gate
+  only has to guarantee that much plus headroom.
 
-Chain (device=auto): turbo/cuda IF >= 3GB VRAM free, else small/cpu.
+Chain (device=auto): turbo/cuda IF >= TURBO_VRAM_FREE_MB free, else small/cpu.
 cuda_setup.setup_cuda_dlls() must run before this module is imported.
 """
 import logging
@@ -17,7 +22,7 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-TURBO_VRAM_FREE_MB = 3000
+TURBO_VRAM_FREE_MB = 2000  # turbo measured at ~1.1GB resident + headroom
 
 
 def _free_vram_mb() -> int:

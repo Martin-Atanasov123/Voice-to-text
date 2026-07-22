@@ -276,6 +276,26 @@ class OllamaCleaner(_BaseCleaner):
         self.timeout_s = timeout_s
 
     def health_check(self) -> bool:
+        """True only when the server is up AND the configured models exist.
+
+        Pinging /api/version alone is not enough: a server started with a wrong
+        OLLAMA_MODELS answers happily while holding zero models, so every
+        cleanup 404s and silently falls back to raw paste. That state went
+        unnoticed for days precisely because the old check called it healthy."""
+        return not self.missing_models()
+
+    def missing_models(self) -> list[str]:
+        """Configured models the server doesn't have. Empty when all is well;
+        every configured model when the server is unreachable."""
+        wanted = sorted(set(self.models.values()))
+        try:
+            data = _http_json(self.base + "/api/tags", None, timeout=3)
+        except Exception:
+            return wanted
+        have = {m.get("name", "") for m in data.get("models", [])}
+        return [w for w in wanted if w not in have and f"{w}:latest" not in have]
+
+    def server_reachable(self) -> bool:
         try:
             with urllib.request.urlopen(self.base + "/api/version", timeout=2) as resp:
                 resp.read()
@@ -353,30 +373,48 @@ def create_cleaner(cfg) -> _BaseCleaner:
     )
 
 
-def find_ollama_app_exe() -> str | None:
-    """Locate the Ollama tray app (not the `ollama` CLI) so it can be launched
-    the same way its own Startup shortcut does — starts the server *and*
-    keeps it running in the tray. None if Ollama isn't installed here."""
+def find_ollama_exe() -> str | None:
+    """Locate the `ollama` CLI. Deliberately NOT the "ollama app.exe" tray app:
+    on this machine the tray app starts the server with OLLAMA_MODELS pointing
+    at the home directory instead of <home>/.ollama/models, so the server comes
+    up healthy but reports ZERO models and every cleanup 404s into raw-paste
+    fallback. `ollama serve` respects the environment we hand it."""
     candidates = [
-        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama app.exe",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe",
     ]
     cli = shutil.which("ollama")
     if cli:
-        candidates.append(Path(cli).with_name("ollama app.exe"))
+        candidates.append(Path(cli))
     for path in candidates:
         if path.is_file():
             return str(path)
     return None
 
 
+def default_models_dir() -> Path:
+    return Path(os.environ.get("USERPROFILE", str(Path.home()))) / ".ollama" / "models"
+
+
 def try_start_ollama() -> bool:
-    """Best-effort silent launch. Returns True if a launch was attempted."""
-    exe = find_ollama_app_exe()
+    """Best-effort silent `ollama serve`. Returns True if a launch was attempted.
+
+    Forces OLLAMA_MODELS to the real store when the inherited value doesn't
+    point at a directory that actually holds manifests — otherwise we would
+    reproduce the tray app's bug and start a server that sees no models."""
+    exe = find_ollama_exe()
     if exe is None:
         return False
+    env = os.environ.copy()
+    configured = Path(env["OLLAMA_MODELS"]) if env.get("OLLAMA_MODELS") else None
+    if configured is None or not (configured / "manifests").is_dir():
+        real = default_models_dir()
+        if (real / "manifests").is_dir():
+            env["OLLAMA_MODELS"] = str(real)
+            log.info("Pointing OLLAMA_MODELS at %s", real)
     try:
         subprocess.Popen(
-            [exe],
+            [exe, "serve"],
+            env=env,
             creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
             close_fds=True,
         )

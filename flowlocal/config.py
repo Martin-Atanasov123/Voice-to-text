@@ -37,7 +37,10 @@ class Config:
     # v1.4: clipboard AI popup after every copy (Summarize/Translate/Explain/Grammar)
     clipboard_ai_enabled: bool = True
     cleanup_enabled: bool = True
-    cleanup_timeout_s: float = 20.0
+    # Measured 2026-07-22 on this machine: warm cleanup is 3.4s (EN) / 5.2s (BG),
+    # but the FIRST call after a model load costs 12-22s (BG 4B on CPU). At the
+    # old 20s the cold BG call timed out and silently pasted raw text.
+    cleanup_timeout_s: float = 45.0
     tap_threshold_s: float = 0.3
     max_record_s: float = 120.0
     # Hotkeys — defaults preserved here so "Reset to defaults" always works
