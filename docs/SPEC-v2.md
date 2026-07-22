@@ -134,9 +134,27 @@ against fresh evidence rather than against that verdict.
 4. **VRAM is shared and volatile.** turbo/cuda depends on ~2GB staying free; another app
    can take it mid-session. The existing CPU fallback covers correctness but produces a
    large, invisible latency cliff.
-5. **Streaming may contend with the final pass** for the same model instance, making
-   release-to-paste *slower* than v1.5 — the opposite of the goal. Needs measurement
-   before committing to the design.
+5. ~~**Streaming may contend with the final pass** for the same model instance.~~
+   **RESOLVED by the M0 spike (2026-07-23)** — it was real, and it killed the original
+   design: one shared model added **+1.66s** to release-to-paste, against a 0.50s budget.
+   A preview pass costs ~1.6s no matter how short the chunk is, because Whisper always
+   encodes a fixed 30s window. Preview therefore runs on a **separate `tiny` model on
+   CPU**, which needs no lock and costs **+0.18s**. See PLAN-v2 M0.
+
+6. **Preview text will visibly differ from what gets pasted.** `tiny` is a much weaker
+   model than turbo, so the user watches lower-quality text that is then replaced by the
+   polished final version. Expected to read as "it's still thinking", but worth checking
+   against real use — if it reads as "it got it wrong", consider `base` instead.
+
+7. **Bulgarian preview quality is unmeasured.** Windows SAPI has no BG voice, so M0 could
+   only benchmark English. `tiny` is weakest exactly on non-English, and BG is half this
+   user's dictation. Validate with real dictation before committing to `tiny`.
+
+8. **This machine runs out of disk under model load.** Holding several whisper models at
+   once during the M0 spike drove Windows to expand the pagefile to ~21GB, leaving 0.22GB
+   free, at which point whisper could not allocate at all and FlowLocal refused to start
+   (`mkl_malloc: failed to allocate memory`). Keep at most the two production models
+   resident, and check free space before any benchmark that loads extras.
 6. **PySide6 licensing (LGPL/commercial) is unresolved for v3.** Irrelevant to v2, but
    it constrains a closed-source paid product and should be verified against Qt's
    current terms before v3 work starts, not after.

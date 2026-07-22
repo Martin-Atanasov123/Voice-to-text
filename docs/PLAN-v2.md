@@ -17,25 +17,47 @@ Two constraints shape everything:
 - Preview must never delay or degrade the final result. If it can't keep up, it falls
   behind silently.
 
-## M0 — Measurement spike (do this before any UI work)
+## M0 — Measurement spike ✅ DONE (2026-07-23)
 
-The one real risk is that preview passes contend with the final pass and make paste
-*slower* than v1.5. Settle it with numbers first.
+Measured with a 49.8s SAPI speech sample, FlowLocal stopped so the GPU was clean.
+**Verdict: live preview is affordable — but NOT with the shared-model design this plan
+originally proposed.**
 
-Reuse the harness already written at
-`%TEMP%\claude\...\scratchpad\bench_stt.py` (SAPI-generated speech, 11.8s sample).
+### The assumption that broke
 
-Measure on the loaded turbo/cuda model:
-- cost of transcribing a 2s / 3s / 4s tail chunk
-- cost of the full-utterance pass for 10s / 30s / 60s of audio
-- worst case added latency: a partial pass in flight at the moment of release
+A preview pass on turbo/cuda costs **~1.6s regardless of chunk length**:
 
-Baseline from 2026-07-22: turbo/cuda runs ~0.15s per second of audio (11.8s → 1.7–2.0s),
-so a 3s chunk should cost ~0.45s.
+| tail chunk | 2s | 3s | 4s |
+|---|---|---|---|
+| cost | 1.64s | 1.61s | 1.62s |
 
-**Kill criteria** — if a preview pass in flight adds more than ~0.5s to release-to-paste,
-do not build the shared-model design. Fall back to previewing only every ~3s with a hard
-"skip if release is imminent" rule, or drop live preview from v2.
+The predicted ~0.45s for a 3s chunk (extrapolated from 0.15s per second of audio) was
+wrong. Whisper always encodes a fixed 30-second window, so a 2s clip pays nearly the same
+encoder cost as a 30s one; only decoding scales with the number of words. Shrinking the
+chunk buys nothing.
+
+Consequences for the shared-model design: each preview pass is *slower than the 1.2s
+interval* between passes, the model ends up busy ~57% of the time, and a pass in flight
+at the moment of release costs the final pass a full lock wait.
+
+| design | added release-to-paste latency |
+|---|---|
+| shared model + lock, forced worst case | **+1.66s** ❌ (limit 0.50s) |
+| separate `tiny`/cpu preview model | **+0.18s** ✅ |
+
+### Design decision
+
+**Preview runs on its own `tiny` model on CPU.** No lock, no shared state, so there is no
+worst-case spike at all — the +0.18s is only CPU contention. A 3s tail costs 0.39–0.43s,
+comfortably faster than the preview interval, and produces usable text
+("hold up well enough to show externally."). VRAM is untouched; `tiny` int8 is ~75MB RAM.
+
+### Reference numbers (turbo/cuda, final pass, vad_filter=True)
+
+| audio | 10s | 30s | 49s |
+|---|---|---|---|
+| pass | 1.73s | 3.61s | 3.93s |
+| per second | 0.173s | 0.120s | 0.080s |
 
 ## M1 — Partial transcription engine
 
@@ -44,25 +66,30 @@ so far **without clearing them**. Copy the list reference first (`blocks = self.
 so the audio callback can keep appending during the copy; do not take `_lock`, since the
 callback never takes it either.
 
-**`flowlocal/stt.py`** — add a `threading.Lock` guarding `self.model`, and
-`transcribe_partial(audio, language)` that calls `_run` with `vad_filter=False` (VAD on a
-2–3s fragment tends to swallow the whole thing — see the `VAD filter removed 00:07.046`
-entries in the log). Both the partial and final paths must acquire the lock.
+**`flowlocal/stt.py`** — add a separate `PreviewTranscriber` holding its own
+`WhisperModel("tiny", device="cpu", compute_type="int8")`, with
+`transcribe_partial(audio, language)` calling `transcribe` with `vad_filter=False` (VAD on
+a 2–3s fragment tends to swallow the whole thing — see the `VAD filter removed 00:07.046`
+entries in the log). **No lock is needed anywhere**: preview and final pass use different
+model objects on different devices. Do not add a lock "just in case" — M0 measured the
+locked design at +1.66s.
 
 **`flowlocal/orchestrator.py`** —
 - new signal `partial_text = Signal(str)` alongside `state_changed`
 - `_do_start` starts a `preview` thread; `_do_finish`/`_do_cancel` clear a
   `threading.Event` to stop it
-- preview loop: every ~1.2s, `recorder.snapshot()`, transcribe **only the newest ~3s**,
-  append to a running preview string, `partial_text.emit(...)`
-- `_do_finish` sets the stop flag **first**, then acquires the STT lock (waiting out any
-  in-flight partial), then runs the existing full-audio `transcribe` unchanged
+- preview loop: every ~1.2s, `recorder.snapshot()`, transcribe **only the newest ~3s** on
+  the preview model, append to a running preview string, `partial_text.emit(...)`
+- `_do_finish` stops the preview thread and runs the existing full-audio `transcribe`
+  unchanged — it never waits for preview work
+- load the preview model in `_preload`, after the main model, so a failure there degrades
+  to "no preview" rather than "no dictation"
 
 The worker thread is free during RECORDING (it blocks on `self._cmds.get()`), so preview
 must run on its own thread — do not reuse the pipeline worker.
 
-**`flowlocal/config.py`** — add `live_preview_enabled: bool = True` and
-`preview_interval_s: float = 1.2`.
+**`flowlocal/config.py`** — add `live_preview_enabled: bool = True`,
+`preview_model: str = "tiny"` and `preview_interval_s: float = 1.2`.
 
 ## M2 — Overlay preview UI
 
