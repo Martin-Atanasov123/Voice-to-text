@@ -30,6 +30,7 @@ from ..cleanup import ApiCleaner, OllamaCleaner, list_ollama_models
 from ..config import Config
 from .. import keymap
 from ..keymap import MODIFIER_VK
+from ..stt import TURBO_VRAM_FREE_MB
 
 WHISPER_MODELS = ["small", "medium", "large-v3-turbo"]
 DEVICES = ["auto", "cuda", "cpu"]
@@ -43,11 +44,15 @@ def _decode_key(s: str) -> tuple[int, bool]:
     return int(vk), bool(int(ext))
 
 
-# Ollama models worth suggesting for cleanup, by minimum system profile
+# Ollama models worth suggesting for cleanup, by minimum system profile.
+# Sizes are approximate (default quantization on ollama.com) -- not independently
+# re-verified here, since confirming them exactly would mean downloading each one.
 RECOMMENDED_PULLS = [
     ("qwen2.5:3b-instruct", "EN cleanup — fast on CPU (~2GB)"),
     ("qwen3:4b-instruct-2507-q4_K_M", "BG cleanup — best small multilingual (~2.5GB)"),
     ("qwen2.5:7b-instruct", "Higher quality, needs 8GB+ VRAM or a fast CPU (~4.7GB)"),
+    ("qwen2.5:14b-instruct", "Noticeably better cleanup, needs ~16GB+ VRAM (~9GB)"),
+    ("qwen2.5:32b-instruct", "Near top-tier quality, needs ~24GB+ VRAM (~19GB)"),
 ]
 
 
@@ -73,25 +78,38 @@ def _recommendation_text(gpu: dict | None) -> str:
     lines = [f"GPU: {gpu['name']} — {total} MB total, {free} MB free right now."]
     if total <= 4096:
         lines.append(
-            "Recommended for this card: whisper 'small' + device 'auto'. Your VRAM is "
-            "usually taken by other apps, so CPU is the reliable path; 'auto' upgrades to "
-            "large-v3-turbo on GPU automatically when ≥3000 MB is free at startup."
+            f"Recommended for this card: whisper 'small' + device 'auto'. Your VRAM is "
+            f"usually taken by other apps, so CPU is the reliable path; 'auto' upgrades to "
+            f"large-v3-turbo on GPU automatically when ≥{TURBO_VRAM_FREE_MB} MB is free "
+            f"at startup."
         )
         lines.append(
             "Cleanup: keep 3B (EN) / 4B (BG) models on CPU. 7B+ models will be too slow "
             "and do NOT fit this GPU."
         )
-        if free >= 3000:
+        if free >= TURBO_VRAM_FREE_MB:
             lines.append("Right now enough VRAM is free — a restart would get you turbo on GPU.")
     elif total <= 8192:
         lines.append(
-            "Recommended: whisper 'large-v3-turbo' + device 'auto' (fits when ~3GB free). "
+            "Recommended: whisper 'large-v3-turbo' + device 'auto'. "
             "Cleanup: up to 7B models."
+        )
+    elif total <= 16384:
+        lines.append(
+            "Recommended: whisper 'large-v3-turbo' on GPU. This card comfortably fits "
+            "7B cleanup models on GPU too, for lower latency than CPU cleanup."
+        )
+    elif total <= 24576:
+        lines.append(
+            "Recommended: whisper 'large-v3-turbo' on GPU + a 14B cleanup model on GPU — "
+            "this card has real headroom past what a 4-8GB card can do. See "
+            "'Good models to install' below."
         )
     else:
         lines.append(
-            "Recommended: whisper 'large-v3-turbo' on GPU + 7B cleanup models — this card "
-            "handles both."
+            "Recommended: whisper 'large-v3-turbo' on GPU + a 32B cleanup model on GPU — "
+            "this card is well past the low-VRAM defaults this app ships with. See "
+            "'Good models to install' below."
         )
     return "\n".join(lines)
 
