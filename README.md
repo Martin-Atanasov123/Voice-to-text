@@ -2,6 +2,23 @@
 
 Local Wispr Flow–style voice-to-text for Windows. **Hold CapsLock → speak → release** — cleaned-up text is pasted into whatever app has focus. 100% offline: Whisper for speech recognition, a local LLM (Ollama) for cleanup. English + Bulgarian, picked automatically from your current keyboard layout.
 
+## Setup (new machine)
+
+```
+powershell -ExecutionPolicy Bypass -File setup.ps1
+```
+
+Creates the `.venv`, installs Python dependencies, detects your GPU, and — if
+[Ollama](https://ollama.com) is already installed — pulls cleanup models sized to your
+actual VRAM (bigger card → bigger model, not just this project's own low-VRAM defaults).
+Safe to re-run: never overwrites an existing config, skips models already pulled.
+
+Whisper's own model choice needs no setup step at all — `whisper_device: "auto"` (the
+default) checks free VRAM live at every startup and picks the best model that fits.
+
+If Ollama isn't installed yet, the script tells you and stops there; install it from
+ollama.com and re-run.
+
 ## Run
 
 ```
@@ -85,7 +102,8 @@ startup — run `.venv\Scripts\python -m flowlocal` in a terminal to see any err
 
 - Speech: faster-whisper `small` int8 on CPU by default — benchmarked fastest on this
   machine because the GTX 1650's 4GB VRAM is usually occupied; `auto` device upgrades to
-  `large-v3-turbo` on GPU when ≥3GB VRAM is actually free at startup.
+  `large-v3-turbo` on GPU when ≥2GB VRAM is actually free at startup (this scales to any
+  GPU — `auto` is not specific to this machine's card).
 - Cleanup LLMs run CPU-only (`num_gpu: 0`) so they never fight Whisper for VRAM.
 - Known v1 limitations: text-only clipboard restore; no paste into elevated (admin) windows;
   cleanup adds seconds (quality-first by design — disable in Settings for instant raw paste).
