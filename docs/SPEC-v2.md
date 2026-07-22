@@ -7,50 +7,40 @@ dictionary, snippets, profiles, configurable hotkeys. This spec covers v2, produ
 through a structured interview on 2026-07-22.
 
 The interview started from three stated complaints — **missing Wispr Flow features,
-speed, and accuracy in both languages** — but diagnosis during the interview showed
-that most of the accuracy complaint had a different cause than assumed. See
-"What the diagnosis changed" below; it materially reduces v2's scope.
+speed, and accuracy in both languages**. Diagnosis showed the accuracy complaint had a
+different cause than assumed (see "What the diagnosis changed"), and the one proposed
+new feature — live preview while speaking — was explored, found to add real complexity
+(two extra models, language-dependent chunking) for a purely cosmetic benefit, and
+**rejected by the user on 2026-07-23**: it doesn't change what gets pasted, only adds a
+"here's what I'm hearing" indicator during the hold, and the existing hold→speak→
+release→paste flow already works well without it.
+
+That leaves v2 as: the accuracy/reliability fixes already investigated, plus one
+open reliability gap.
 
 ## Spec Summary
 
 ### Product & users
-- Unchanged: single-user, Windows, fully local, tray app. Same core gesture.
+- Unchanged: single-user, Windows, fully local, tray app. Same core gesture, same UI —
+  **no new feature in v2**.
 - **v2 targets the owner's machine only.** Public release is explicitly **v3**.
 - Long-term direction (decided, not built in v2): replace the Ollama dependency
   with **inference bundled into the app** (llama.cpp/GGUF), because no ordinary
-  user will install Ollama and pull models by hand. v2 must therefore **not deepen
-  the coupling to Ollama** — new cleanup work goes behind the existing
-  `_BaseCleaner` interface in `cleanup.py`, which already abstracts backends via
+  user will install Ollama and pull models by hand. New cleanup work goes behind the
+  existing `_BaseCleaner` interface in `cleanup.py`, which already abstracts backends via
   `create_cleaner(cfg)`.
 
-### The one new feature: live preview while speaking
-- While the push-to-talk key is held, partial transcription appears **inside
-  FlowLocal's own overlay**, updating as the user speaks.
-- **Nothing is inserted into the target app until release.** On release the full
-  audio is transcribed and cleaned as it is today, and only that final polished
-  text is pasted.
-- Rationale: whole-utterance cleanup is what makes self-corrections work
-  ("Tuesday… no wait, Wednesday" → "Wednesday"). Streaming text directly into the
-  focused app would require retroactively rewriting already-inserted text via
-  simulated backspaces — fragile, and impossible in some apps. Preview in our own
-  window gives the live feel at zero cost to output quality.
-- The streamed partials are **preview-only**; they never become the pasted text.
-
 ### Speed
-- The hard "<1s after release" target was **withdrawn during the interview** in
-  favour of quality: "не е задължително да е под 1 секунда, но определено трябва
-  някаква оптимизация със скоростта."
-- Target: measurable improvement over v1.5, with cleanup quality untouched.
-- Largest win already banked (see below): GPU transcription.
+- The hard "<1s after release" target was **withdrawn during the interview** in favour of
+  quality, then the whole speed workstream became moot once GPU transcription was fixed
+  (see below) and live preview was dropped — there is no remaining speed work in v2.
 
 ### Accuracy
-- Re-evaluated **after** the fixes below, then scoped. The user explicitly chose
-  "fix, test, then decide" over planning the whole accuracy workstream up front.
-- One accuracy defect is already confirmed and does **not** depend on re-measurement:
-  the Bulgarian cleanup model mishandles self-corrections (see Risks).
+- Largely resolved by fixes already applied: dead cleanup revived, GPU model unlocked,
+  and the Bulgarian self-correction defect fixed (see Risks — M3, done).
 
 ### Out of scope for v2
-- Direct streaming insertion into the target app.
+- Live preview / streaming text while speaking — **explicitly rejected**, not deferred.
 - Automatic language detection / mixed language within one dictation.
 - Spoken formatting commands ("new paragraph", "bullet list").
 - Languages beyond EN/BG.
@@ -76,33 +66,24 @@ Investigated during the interview, fixed and committed as `2641a9c`:
    first call after a model load costs 12–22s against a 20s timeout — another silent
    raw-paste path. Timeout raised to 45s.
 
-**Consequence for planning:** the user's verdict "both languages are wrong" was formed
-over ~9 dictations running the weakest model (`small`) on CPU with **no AI cleanup at
-all**. That configuration no longer exists. The accuracy workstream must be re-scoped
-against fresh evidence rather than against that verdict.
+**Consequence:** the user's verdict "both languages are wrong" was formed over ~9
+dictations running the weakest model (`small`) on CPU with **no AI cleanup at all**. That
+configuration no longer exists.
 
-## Core flow (v2, changes marked ▲)
+## Core flow (v2 — unchanged from v1.5)
 
 1. Tray app idles, models warm.
 2. User holds the push-to-talk key.
-3. Overlay appears. ▲ **Partial transcript streams into the overlay while speaking.**
+3. Overlay shows recording/processing status, as today.
 4. Release → full-audio transcription (turbo/cuda) → whole-utterance LLM cleanup.
 5. Cleaned text → clipboard → Ctrl+V → clipboard restored.
 6. Saved to SQLite history (raw + cleaned + app + status), as today.
 
 ## ASSUMPTIONS (no firm answer given — defaults chosen)
 
-1. Preview granularity is **segment/sentence level**, not word-by-word — it follows
-   faster-whisper's natural segment boundaries rather than a custom decoder loop.
-2. The final paste always comes from a **fresh full-audio pass**, never from stitched
-   partials, since chunked transcription is less accurate across chunk boundaries.
-3. Streaming runs on the **same single model instance**; no second model is loaded for
-   partials (4GB VRAM cannot host two).
-4. If streaming can't keep up in real time, the overlay silently falls behind and
-   catches up — it never delays or degrades the final result.
-5. Max dictation length stays 120s (`max_record_s`).
-6. EN/BG stay layout-selected; no detection work in v2.
-7. Exact library versions to be confirmed against current docs at implementation time
+1. Max dictation length stays 120s (`max_record_s`).
+2. EN/BG stay layout-selected; no detection work in v2.
+3. Exact library versions to be confirmed against current docs at implementation time
    (standing project rule — no version guessing).
 
 ## OPEN RISKS
@@ -124,63 +105,33 @@ against fresh evidence rather than against that verdict.
    Remaining known limitation: a genuinely ambiguous "не чакай" with no punctuation is
    still read as an imperative. This is arguably correct and is deliberately not
    "fixed" — forcing the self-correction reading would delete real instructions.
-2. **The Ollama tray app will re-break the models path.** The user's Startup shortcut
-   launches `ollama app.exe` at login, which forces the bad `OLLAMA_MODELS`. FlowLocal
-   now repairs this when *it* starts the server, but if the tray app wins the race and
-   claims port 11434 first, cleanup is dead again until restart. The bad value's origin
-   was never located — not in User/Machine env, registry, or `~/.ollama/config.json`.
-3. **Accuracy scope is unknown until re-measured.** v2 may need no accuracy work at all,
-   or may need a different BG cleanup model. Do not commit engineering to this yet.
-4. **VRAM is shared and volatile.** turbo/cuda depends on ~2GB staying free; another app
+
+2. **The Ollama tray app will re-break the models path.** *(Open — this is PLAN-v2 M4.)*
+   The user's Startup shortcut launches `ollama app.exe` at login, which forces the bad
+   `OLLAMA_MODELS`. FlowLocal now repairs this when *it* starts the server, but if the
+   tray app wins the race and claims port 11434 first, cleanup is dead again until
+   restart. The bad value's origin was never located — not in User/Machine env, registry,
+   or `~/.ollama/config.json`.
+
+3. **VRAM is shared and volatile.** turbo/cuda depends on ~2GB staying free; another app
    can take it mid-session. The existing CPU fallback covers correctness but produces a
    large, invisible latency cliff.
-5. ~~**Streaming may contend with the final pass** for the same model instance.~~
-   **RESOLVED by the M0 spike (2026-07-23)** — it was real, and it killed the original
-   design: one shared model added **+1.66s** to release-to-paste, against a 0.50s budget.
-   A preview pass costs ~1.6s no matter how short the chunk is, because Whisper always
-   encodes a fixed 30s window. Preview therefore runs on a **separate `tiny` model on
-   CPU**, which needs no lock and costs **+0.18s**. See PLAN-v2 M0.
 
-6. **Preview text will visibly differ from what gets pasted.** `tiny` is a much weaker
-   model than turbo, so the user watches lower-quality text that is then replaced by the
-   polished final version. Expected to read as "it's still thinking", but worth checking
-   against real use — if it reads as "it got it wrong", consider `base` instead.
+4. **This machine's free disk drops sharply under heavy model use, via the pagefile.**
+   Observed 2026-07-23: holding several whisper models resident at once expanded the
+   Windows pagefile to ~21GB, leaving 0.22GB free, at which point whisper could not
+   allocate at all and FlowLocal refused to start (`mkl_malloc: failed to allocate
+   memory`). Not a v2 code risk, but a standing operational constraint — check free disk
+   before loading extra models for any future experiment, and don't hold more than the
+   production set (turbo + the two Ollama models) resident at once.
 
-7. ~~**Bulgarian preview quality is unmeasured.**~~ **RESOLVED (2026-07-23) — and the
-   `tiny` design does NOT work for Bulgarian.** Tested on 3 real recordings from the
-   user's own mic (SAPI has no BG voice, so no synthetic option existed). `tiny` produces
-   unreadable syllable-soup on a 3s tail ("Върдите, върдите, върдите.") and gets **worse,
-   not better**, on the full clip — hallucinating, one recording came back empty, and
-   runtime ballooned to ~9s. `base`/cpu on the FULL clip (not a tail slice) stayed close
-   to the turbo/cuda reference (recognizable, coherent Bulgarian) at 1.6–1.8s per pass.
-
-   Two separate causes, isolated with a 2×2 test (model size × chunk-vs-full):
-   - **Chunking hurts even the strong model**: turbo itself degrades on an isolated 3s
-     tail (no preceding context to disambiguate).
-   - **Model size has a real capability cliff for Bulgarian independent of chunking**:
-     `tiny` does not improve with more context the way `turbo` does — it gets worse.
-
-   Consequence: the preview design must be **language-dependent**. EN can keep the fast
-   `tiny` + fixed tail-chunk design (verified good quality in M0). BG needs `base`/cpu on
-   a **growing window** (re-transcribe from the start of the recording each pass, not a
-   fixed-length tail), at a longer interval (~2s, not 1.2s) to match the higher per-pass
-   cost. See PLAN-v2 M1.
-
-8. **This machine runs out of disk under model load.** Holding several whisper models at
-   once during the M0 spike drove Windows to expand the pagefile to ~21GB, leaving 0.22GB
-   free, at which point whisper could not allocate at all and FlowLocal refused to start
-   (`mkl_malloc: failed to allocate memory`). Keep at most the two production models
-   resident, and check free space before any benchmark that loads extras.
-6. **PySide6 licensing (LGPL/commercial) is unresolved for v3.** Irrelevant to v2, but
+5. **PySide6 licensing (LGPL/commercial) is unresolved for v3.** Irrelevant to v2, but
    it constrains a closed-source paid product and should be verified against Qt's
    current terms before v3 work starts, not after.
 
 ## Verification (how we'll know v2 works)
 
-- Dictate EN and BG into Notepad, Chrome and Word: live text appears in the overlay
-  while speaking; the pasted result is cleaned, and the clipboard is restored.
-- Release-to-paste latency measured against a v1.5 baseline on identical audio.
-- Self-correction phrases produce the corrected version **in both languages**.
+- Self-correction phrases produce the corrected version **in both languages** (M3, done).
 - Kill Ollama mid-session → raw text pasted with a warning, nothing lost.
 - Start with Ollama's tray app already running → app reports the real state instead
-  of claiming health (regression test for the bug found today).
+  of claiming health (regression test for the bug found on 2026-07-22; covered by M4).

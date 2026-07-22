@@ -1,147 +1,20 @@
 # FlowLocal v2 — Implementation Plan
 
-Spec: [SPEC-v2.md](SPEC-v2.md). Scope confirmed after the user tested the 2026-07-22
-fixes and reported Bulgarian now has "only very small problems" — so the large accuracy
-workstream is **dropped**, leaving one targeted correctness fix.
+Spec: [SPEC-v2.md](SPEC-v2.md).
 
 ## Context
 
-v1.5 pastes text only after the key is released, with no feedback while speaking. v2 adds
-a **live preview inside FlowLocal's own overlay** and improves release-to-paste speed,
-without touching output quality: the pasted text still comes from a whole-utterance
-transcription + cleanup pass, because self-corrections depend on seeing the full sentence.
+Live preview while speaking was explored and **rejected by the user on 2026-07-23**: it
+only adds a cosmetic "here's what I'm hearing" indicator during the hold — the text that
+actually gets pasted was never going to change — and the investigation showed it would
+require two extra models, a language-dependent chunking strategy, and non-trivial new
+failure modes, for a feature the current hold→speak→release→paste flow doesn't need. Full
+spike data (M0/M1 measurements, the Bulgarian tiny-vs-base experiment) stays in git
+history (`825dc07`, `8357b32`) if a future session wants to revisit it — nothing here
+carries it forward.
 
-Two constraints shape everything:
-- One whisper model instance, ~1.1GB on a 4GB GPU. Preview and final pass **share** it
-  and must be serialised.
-- Preview must never delay or degrade the final result. If it can't keep up, it falls
-  behind silently.
-
-## M0 — Measurement spike ✅ DONE (2026-07-23)
-
-Measured with a 49.8s SAPI speech sample, FlowLocal stopped so the GPU was clean.
-**Verdict: live preview is affordable — but NOT with the shared-model design this plan
-originally proposed.**
-
-### The assumption that broke
-
-A preview pass on turbo/cuda costs **~1.6s regardless of chunk length**:
-
-| tail chunk | 2s | 3s | 4s |
-|---|---|---|---|
-| cost | 1.64s | 1.61s | 1.62s |
-
-The predicted ~0.45s for a 3s chunk (extrapolated from 0.15s per second of audio) was
-wrong. Whisper always encodes a fixed 30-second window, so a 2s clip pays nearly the same
-encoder cost as a 30s one; only decoding scales with the number of words. Shrinking the
-chunk buys nothing.
-
-Consequences for the shared-model design: each preview pass is *slower than the 1.2s
-interval* between passes, the model ends up busy ~57% of the time, and a pass in flight
-at the moment of release costs the final pass a full lock wait.
-
-| design | added release-to-paste latency |
-|---|---|
-| shared model + lock, forced worst case | **+1.66s** ❌ (limit 0.50s) |
-| separate `tiny`/cpu preview model | **+0.18s** ✅ |
-
-### Design decision
-
-**Preview runs on its own `tiny` model on CPU.** No lock, no shared state, so there is no
-worst-case spike at all — the +0.18s is only CPU contention. A 3s tail costs 0.39–0.43s,
-comfortably faster than the preview interval, and produces usable text
-("hold up well enough to show externally."). VRAM is untouched; `tiny` int8 is ~75MB RAM.
-
-### Reference numbers (turbo/cuda, final pass, vad_filter=True)
-
-| audio | 10s | 30s | 49s |
-|---|---|---|---|
-| pass | 1.73s | 3.61s | 3.93s |
-| per second | 0.173s | 0.120s | 0.080s |
-
-## M1 — Partial transcription engine
-
-### Bulgarian preview spike ✅ DONE (2026-07-23) — design is language-dependent
-
-Tested on 3 real recordings from the user's own mic (SAPI has no BG voice). Decisive,
-isolated with a 2×2 test (model size × tail-chunk-vs-full-clip):
-
-| | 3s tail | full clip |
-|---|---|---|
-| `turbo`/cuda (reference) | garbled but real words | good, coherent |
-| `tiny`/cpu | unreadable syllable-soup | **worse** — hallucinates, one clip came back empty, ~9s runtime |
-| `base`/cpu | not tested | close to turbo reference, readable, **1.6–1.8s** |
-| `small`/cpu | not tested | close to turbo reference, readable, **3.7–4.7s** |
-
-Two independent causes, not one:
-- **Chunking hurts even the strong model** — turbo itself degrades on an isolated tail
-  with no preceding context.
-- **`tiny` has a real capability cliff on Bulgarian, independent of chunking** — it gets
-  *worse* with more context (hallucinates), while `turbo` gets much better. `base`
-  crosses whatever capacity threshold `tiny` doesn't.
-
-**Design is therefore language-dependent:**
-- **EN**: `tiny`/cpu, fixed ~3s tail, ~1.2s interval — quality verified good in M0
-  ("hold up well enough to show externally.").
-- **BG**: `base`/cpu, **growing window** (re-transcribe from the start of the recording
-  every pass, not a fixed tail), ~2s interval to match the higher per-pass cost. Cost is
-  expected to plateau the way turbo's did in M0 (~30s window is roughly fixed-cost) but
-  this is inferred from architecture, not directly measured past ~30s — re-check if long
-  BG dictations turn out to be common in practice.
-
-### Implementation
-
-**`flowlocal/audio.py`** — add `snapshot() -> np.ndarray`: concatenate the blocks captured
-so far **without clearing them**. Copy the list reference first (`blocks = self._blocks[:]`)
-so the audio callback can keep appending during the copy; do not take `_lock`, since the
-callback never takes it either.
-
-**`flowlocal/stt.py`** — add a separate `PreviewTranscriber` holding two CPU models,
-`tiny` and `base`, and picking one per call based on `language`:
-`transcribe_partial(audio, language)`. For EN, pass just the trailing ~3s with
-`vad_filter=False` (VAD on a short fragment tends to swallow the whole thing — see the
-`VAD filter removed 00:07.046` entries in the log). For BG, pass the **full audio
-captured so far** with `vad_filter=False`. **No lock is needed anywhere**: preview and
-final pass use different model objects on different devices. Do not add a lock "just in
-case" — M0 measured the locked shared-model design at +1.66s.
-
-**`flowlocal/orchestrator.py`** —
-- new signal `partial_text = Signal(str)` alongside `state_changed`
-- `_do_start` starts a `preview` thread; `_do_finish`/`_do_cancel` clear a
-  `threading.Event` to stop it
-- preview loop: interval depends on language (~1.2s EN / ~2s BG, see `config.py` below);
-  `recorder.snapshot()`; call `transcribe_partial`; `partial_text.emit(...)` with the
-  result (replacing the previous preview text for BG's growing window, appending for
-  EN's tail-based approach)
-- `_do_finish` stops the preview thread and runs the existing full-audio `transcribe`
-  unchanged — it never waits for preview work
-- load both preview models in `_preload`, after the main model, so a failure there
-  degrades to "no preview" rather than "no dictation"
-
-The worker thread is free during RECORDING (it blocks on `self._cmds.get()`), so preview
-must run on its own thread — do not reuse the pipeline worker.
-
-**`flowlocal/config.py`** — add `live_preview_enabled: bool = True`,
-`preview_model_en: str = "tiny"`, `preview_model_bg: str = "base"`,
-`preview_interval_en_s: float = 1.2`, `preview_interval_bg_s: float = 2.0`.
-
-## M2 — Overlay preview UI
-
-**`flowlocal/ui/overlay.py`** — currently a single-line pill whose `_on_pulse` recovers the
-elapsed seconds by string-splitting the label text (`text.rsplit(" ", 1)[0]`). That breaks
-the moment the label holds transcript text.
-
-- store `self._elapsed_text` and `self._preview_text` as separate fields and rebuild the
-  label from both, instead of parsing the rendered string
-- add `set_partial(text: str)` slot; it always receives the **full current preview
-  text** (the orchestrator composes it — accumulated tail for EN, full retranscription
-  for BG), never a delta to append. Keep only the tail (~140 chars) for display so the
-  pill stays a pill, enable word wrap and cap the width (~520px)
-- `adjustSize()` + `_position()` on each update so it stays bottom-centred while growing
-- clear preview text on IDLE/ERROR so nothing leaks into the next dictation
-
-**`flowlocal/app.py`** — connect `self.orch.partial_text` to `self.overlay.set_partial`
-next to the existing `state_changed` connections (queued automatically across threads).
+With that dropped, v2 shrinks to the one confirmed correctness fix plus one open
+reliability gap, both already scoped in [SPEC-v2.md](SPEC-v2.md).
 
 ## M3 — Bulgarian self-correction fix ✅ DONE (2026-07-22)
 
@@ -167,7 +40,7 @@ previously passing cases, EN untouched.
 
 Regression test: **`tests/check_cleanup_bg.py`** (6 cases, exits non-zero on failure).
 
-## M4 — Keep Ollama from breaking again
+## M4 — Keep Ollama from breaking again (next up)
 
 The models path was fixed on 2026-07-22, but the user's Startup shortcut still launches
 `ollama app.exe`, which forces the bad `OLLAMA_MODELS`. If it wins the race for port
@@ -183,20 +56,8 @@ The models path was fixed on 2026-07-22, but the user's Startup shortcut still l
 
 ## Verification
 
-- Dictate EN and BG into Notepad, Chrome and Word: text appears in the overlay while
-  speaking; the pasted result is the cleaned full-utterance version; clipboard restored.
-- Compare release-to-paste against a v1.5 baseline on the same audio — must not regress.
-- Self-correction phrases produce the corrected version in **both** languages (M3).
-- Tap (short press) mid-preview cancels cleanly and leaves no preview text behind.
+- Self-correction phrases produce the corrected version in **both** languages (M3) —
+  covered by `tests/check_cleanup_bg.py`.
 - Kill Ollama mid-session → raw text pasted with a warning, nothing lost.
 - Start with Ollama's tray app already running → the app reports the real state instead
   of claiming health (regression test for the bug found on 2026-07-22).
-- Dictate 60s → confirm the preview keeps up or degrades gracefully, and the final pass
-  still produces one coherent transcript.
-
-## Known limitation to accept
-
-Long dictations stay slow at the end: the final pass re-transcribes the whole utterance
-(~0.15s per second of audio, so ~9s for a 60s dictation). Reusing the partials to skip it
-would cut this dramatically but costs accuracy at chunk boundaries — explicitly rejected
-in the spec. Revisit only if long dictations turn out to be common in practice.
