@@ -11,18 +11,28 @@ The same hook doubles as a generic "press any key" capturer for the Hotkeys
 settings UI (begin_capture) — necessary because once a key is hijacked here,
 Qt never sees it, so there is no other reliable way to let the user pick it.
 
-Hook-proc rules (Windows removes hooks that exceed ~300ms):
-- no allocation-heavy work, no logging, no Qt calls
-- callbacks must return fast; heavy work belongs on other threads
+Hook-proc rules (Windows silently REMOVES a low-level hook whose proc doesn't
+return within ~300ms — LowLevelHooksTimeout — leaving the app running but
+completely unresponsive to the key, with no error and no way to recover short
+of restarting. Observed in practice: heavy CPU-bound work elsewhere in the
+process (e.g. faster-whisper transcription) can starve this thread of the GIL
+long enough to trip that timeout):
+- no allocation-heavy work in the hot path; callbacks must return fast
 - module/instance-level reference to HOOKPROC prevents GC crash
+- run() periodically re-registers the hook (see _REFRESH_MS) as a safety net:
+  if Windows ever drops it silently, this recovers within one interval
+  without the user needing to notice or restart anything
 """
 import ctypes
 import ctypes.wintypes as wt
+import logging
 import threading
 import time
 from typing import Callable
 
 from .keymap import DEFAULT_PTT, MODIFIER_VK, VK_ESCAPE
+
+log = logging.getLogger(__name__)
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -33,6 +43,8 @@ WM_KEYUP = 0x0101
 WM_SYSKEYDOWN = 0x0104
 WM_SYSKEYUP = 0x0105
 WM_QUIT = 0x0012
+WM_TIMER = 0x0113
+_REFRESH_MS = 120_000  # 2 min: recovery window if Windows silently drops the hook
 LLKHF_EXTENDED = 0x01
 LLKHF_INJECTED = 0x10
 
@@ -55,6 +67,9 @@ user32.SetWindowsHookExW.restype = wt.HHOOK
 user32.SetWindowsHookExW.argtypes = (ctypes.c_int, HOOKPROC, wt.HINSTANCE, wt.DWORD)
 user32.CallNextHookEx.restype = LRESULT
 user32.CallNextHookEx.argtypes = (wt.HHOOK, ctypes.c_int, wt.WPARAM, wt.LPARAM)
+user32.SetTimer.restype = ctypes.c_size_t  # UINT_PTR
+user32.SetTimer.argtypes = (wt.HWND, ctypes.c_size_t, ctypes.c_uint, ctypes.c_void_p)
+user32.KillTimer.argtypes = (wt.HWND, ctypes.c_size_t)
 
 
 class PTTHook(threading.Thread):
@@ -127,7 +142,7 @@ class PTTHook(threading.Thread):
                             else:
                                 cb(kb.vkCode, bool(kb.flags & LLKHF_EXTENDED))
                         except Exception:
-                            pass
+                            log.exception("key-capture callback failed")
                     return 1
                 if w_param in (WM_KEYUP, WM_SYSKEYUP) and kb.vkCode == self._capture_vk:
                     self._capture_vk = None
@@ -152,7 +167,7 @@ class PTTHook(threading.Thread):
                                 )
                                 self.on_press(command)
                         except Exception:
-                            pass
+                            log.exception("on_press/on_combo callback failed")
                     return 1  # suppress the key's normal effect
                 if w_param in (WM_KEYUP, WM_SYSKEYUP):
                     if self._is_down:
@@ -166,9 +181,24 @@ class PTTHook(threading.Thread):
                             else:
                                 self.on_release(held)
                         except Exception:
-                            pass
+                            log.exception("on_tap/on_release callback failed")
                     return 1
         return user32.CallNextHookEx(None, n_code, w_param, l_param)
+
+    def _reinstall_hook(self) -> None:
+        """Re-register the hook. Installs the replacement before removing the
+        old one so there is never a gap with zero hooks active; any physical
+        key event landing in between is handled twice by the same stateful
+        _hook_proc, which already dedupes via _is_down — harmless."""
+        old = self._hook
+        new = user32.SetWindowsHookExW(WH_KEYBOARD_LL, self._proc, None, 0)
+        if new:
+            self._hook = new
+            if old:
+                user32.UnhookWindowsHookEx(old)
+            log.debug("PTT hook refreshed")
+        else:
+            log.warning("PTT hook refresh failed — keeping previous handle")
 
     def run(self):
         self._tid = kernel32.GetCurrentThreadId()
@@ -176,11 +206,18 @@ class PTTHook(threading.Thread):
         self._ready.set()
         if not self._hook:
             return
+        timer_id = user32.SetTimer(None, 0, _REFRESH_MS, None)
         msg = wt.MSG()
         while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
+            if msg.message == WM_TIMER and (not timer_id or msg.wParam == timer_id):
+                self._reinstall_hook()
+                continue
             user32.TranslateMessage(ctypes.byref(msg))
             user32.DispatchMessageW(ctypes.byref(msg))
-        user32.UnhookWindowsHookEx(self._hook)
+        if timer_id:
+            user32.KillTimer(None, timer_id)
+        if self._hook:
+            user32.UnhookWindowsHookEx(self._hook)
         self._hook = None
 
     def start(self):
