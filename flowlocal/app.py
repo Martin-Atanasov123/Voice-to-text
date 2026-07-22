@@ -50,6 +50,13 @@ class _ShowBridge(QObject):
     show_requested = Signal()
 
 
+class _OllamaBridge(QObject):
+    """Marshals the 'still unreachable after auto-start' notice from the
+    recovery thread to Qt (tray.showMessage must run on the Qt thread)."""
+
+    still_down = Signal(str)
+
+
 class FlowLocalApp:
     def __init__(self, argv: list[str]):
         self.qt = QApplication(argv)
@@ -75,7 +82,9 @@ class FlowLocalApp:
             command_modifier_vk=MODIFIER_VK.get(self.cfg.command_modifier, MODIFIER_VK["shift"]),
         )
 
-        self.window = MainWindow(self.cfg, self.orch, capture_key_fn=self.hook.begin_capture)
+        self.window = MainWindow(
+            self.cfg, self.orch, capture_key_fn=self.hook.begin_capture, hook=self.hook
+        )
         self.tray = Tray(
             on_pause=self._toggle_pause,
             on_settings=lambda: self.window.open_page(MainWindow.PAGE_SETTINGS),
@@ -127,14 +136,18 @@ class FlowLocalApp:
         watch_show_requests(self._show_bridge.show_requested.emit)
         self.window.open_page(MainWindow.PAGE_OVERVIEW)
         if self.cfg.cleanup_enabled and not self.orch.cleaner.health_check():
-            msg = (
-                "Ollama is not running — dictations will paste raw text.\n"
-                "Start Ollama (or install from ollama.com) for AI cleanup."
-                if self.cfg.cleanup_backend == "ollama"
-                else "Cleanup API is unreachable — dictations will paste raw text.\n"
-                "Check the API settings in Settings → Models & AI."
-            )
-            self.tray.showMessage("FlowLocal", msg, QSystemTrayIcon.Warning, 8000)
+            if self.cfg.cleanup_backend == "ollama":
+                self._ollama_bridge = _OllamaBridge()
+                self._ollama_bridge.still_down.connect(
+                    lambda msg: self.tray.showMessage("FlowLocal", msg, QSystemTrayIcon.Warning, 8000)
+                )
+                self._try_recover_ollama()
+            else:
+                msg = (
+                    "Cleanup API is unreachable — dictations will paste raw text.\n"
+                    "Check the API settings in Settings → Models & AI."
+                )
+                self.tray.showMessage("FlowLocal", msg, QSystemTrayIcon.Warning, 8000)
         self.orch.start()
         try:
             self.hook.start()
@@ -145,6 +158,36 @@ class FlowLocalApp:
         self.hook.stop()  # CapsLock behaves normally again after quit
         self.orch.shutdown()
         return rc
+
+    def _try_recover_ollama(self) -> None:
+        """Ollama has to be manually launched after each reboot (its own
+        Startup entry only fires at login, and it doesn't stay running once
+        closed) — so the 'not running' toast was showing up on most launches.
+        Try to start it ourselves first and only nag if that doesn't work."""
+        import threading
+        import time
+
+        from .cleanup import try_start_ollama
+
+        def work() -> None:
+            if not try_start_ollama():
+                self._ollama_bridge.still_down.emit(
+                    "Ollama is not running — dictations will paste raw text.\n"
+                    "Start Ollama (or install from ollama.com) for AI cleanup."
+                )
+                return
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                if self.orch.cleaner.health_check():
+                    log.info("Ollama came up automatically")
+                    return
+                time.sleep(1)
+            self._ollama_bridge.still_down.emit(
+                "Ollama didn't finish starting — dictations will paste raw text.\n"
+                "Open it manually if this keeps happening."
+            )
+
+        threading.Thread(target=work, daemon=True).start()
 
     # -- clipboard AI ----------------------------------------------------------
     def _clipboard_changed(self) -> None:

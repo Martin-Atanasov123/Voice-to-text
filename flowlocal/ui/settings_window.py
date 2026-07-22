@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 from ..cleanup import ApiCleaner, OllamaCleaner, list_ollama_models
 from ..config import Config
 from .. import keymap
+from ..keymap import MODIFIER_VK
 
 WHISPER_MODELS = ["small", "medium", "large-v3-turbo"]
 DEVICES = ["auto", "cuda", "cpu"]
@@ -120,10 +121,11 @@ class SettingsWindow(QWidget):
     # Qt auto-queues delivery of _capture_finished onto this widget's thread
     key_captured = Signal(object, bool)
 
-    def __init__(self, cfg: Config, capture_key_fn=None):
+    def __init__(self, cfg: Config, capture_key_fn=None, hook=None):
         super().__init__()
         self.cfg = cfg
         self._capture_key_fn = capture_key_fn
+        self._hook = hook
         self.key_captured.connect(self._capture_finished)
         self.setWindowTitle("FlowLocal — Settings")
         self.resize(640, 560)
@@ -134,7 +136,8 @@ class SettingsWindow(QWidget):
         tabs.addTab(self._hotkeys_tab(), "Hotkeys")
 
         note = QLabel(
-            "Speech model, device, backend and hotkey changes take effect after restarting FlowLocal."
+            "Speech model, device and backend changes take effect after restarting FlowLocal. "
+            "Hotkey changes apply immediately."
         )
         note.setWordWrap(True)
         note.setStyleSheet("color: gray;")
@@ -439,6 +442,12 @@ class SettingsWindow(QWidget):
         cfg.ptt_label = keymap.key_name(vk, ext)
         cfg.rewrite_modifier = self._rewrite_mod.currentData()
         cfg.command_modifier = self._command_mod.currentData()
+        if self._hook is not None:
+            # live-apply so the new hotkey works immediately, no restart needed
+            self._hook.primary_vk = vk
+            self._hook.primary_extended = ext
+            self._hook.rewrite_modifier_vk = MODIFIER_VK.get(cfg.rewrite_modifier, MODIFIER_VK["ctrl"])
+            self._hook.command_modifier_vk = MODIFIER_VK.get(cfg.command_modifier, MODIFIER_VK["shift"])
 
         cfg.mic_device = self._mic.currentData()
         cfg.cleanup_enabled = self._cleanup.isChecked()
@@ -463,5 +472,5 @@ class SettingsWindow(QWidget):
 
             set_autostart(cfg.autostart)
         self._saved_note.setText(
-            "Saved. Speech model / backend changes apply after restarting FlowLocal."
+            "Saved — hotkeys are active now. Speech model / backend changes apply after restarting FlowLocal."
         )

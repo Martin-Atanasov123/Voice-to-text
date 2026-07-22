@@ -5,8 +5,12 @@ transcript — the user's words are never lost because cleanup failed.
 """
 import json
 import logging
+import os
+import shutil
+import subprocess
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -347,6 +351,39 @@ def create_cleaner(cfg) -> _BaseCleaner:
         {"en": cfg.ollama_model_en, "bg": cfg.ollama_model_bg},
         cfg.cleanup_timeout_s,
     )
+
+
+def find_ollama_app_exe() -> str | None:
+    """Locate the Ollama tray app (not the `ollama` CLI) so it can be launched
+    the same way its own Startup shortcut does — starts the server *and*
+    keeps it running in the tray. None if Ollama isn't installed here."""
+    candidates = [
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama app.exe",
+    ]
+    cli = shutil.which("ollama")
+    if cli:
+        candidates.append(Path(cli).with_name("ollama app.exe"))
+    for path in candidates:
+        if path.is_file():
+            return str(path)
+    return None
+
+
+def try_start_ollama() -> bool:
+    """Best-effort silent launch. Returns True if a launch was attempted."""
+    exe = find_ollama_app_exe()
+    if exe is None:
+        return False
+    try:
+        subprocess.Popen(
+            [exe],
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+            close_fds=True,
+        )
+        return True
+    except OSError as e:
+        log.warning("Failed to auto-start Ollama: %s", e)
+        return False
 
 
 def list_ollama_models(url: str) -> list[dict]:
