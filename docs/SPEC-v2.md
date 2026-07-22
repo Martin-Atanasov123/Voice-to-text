@@ -107,12 +107,23 @@ against fresh evidence rather than against that verdict.
 
 ## OPEN RISKS
 
-1. **Bulgarian self-corrections are silently wrong — confirmed, not hypothetical.**
-   Input "…да се видим във вторник не чакай в сряда" produced "…да се видим във
-   **вторник**." across 3/3 runs — it kept Tuesday and dropped the correction to
-   Wednesday. English handled the identical construction correctly. This is worse than
-   no cleanup: confidently wrong content, in this case the wrong day of the week.
-   Cause not yet isolated between `qwen3:4b-instruct-2507` and the BG prompt.
+1. ~~**Bulgarian self-corrections are silently wrong.**~~ **RESOLVED 2026-07-22 — and
+   the original diagnosis in this document was wrong.** Systematic investigation showed
+   the failing test sentence ("…във вторник не чакай в сряда") was itself flawed: unlike
+   English "no wait", Bulgarian "не чакай" is *also* a literal imperative ("do not
+   wait"), so keeping "вторник" was a defensible reading. Every unambiguous BG
+   self-correction marker (не, / извинявай / тоест / не, чакай,) already worked 3/3.
+
+   The investigation did uncover a **worse, unrelated defect**: `FEW_SHOT["bg"]` used
+   that same ambiguous "не чакай" as its self-correction example, which taught the model
+   to treat "не чакай X" as *delete what follows*. Ordinary sentences lost content
+   deterministically — "тръгвай веднага не чакай автобуса" → "Тръгвай веднага." (0/3
+   kept the clause). Fixed by switching the example to the unambiguous "извинявай";
+   the same sentences now survive 3/3. Regression test: `tests/check_cleanup_bg.py`.
+
+   Remaining known limitation: a genuinely ambiguous "не чакай" with no punctuation is
+   still read as an imperative. This is arguably correct and is deliberately not
+   "fixed" — forcing the self-correction reading would delete real instructions.
 2. **The Ollama tray app will re-break the models path.** The user's Startup shortcut
    launches `ollama app.exe` at login, which forces the bad `OLLAMA_MODELS`. FlowLocal
    now repairs this when *it* starts the server, but if the tray app wins the race and

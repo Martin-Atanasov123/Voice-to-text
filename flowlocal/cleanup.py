@@ -114,8 +114,15 @@ FEW_SHOT = {
             "напиши имейл на шефа ми че ъъъ днес съм болен",
             "Напиши имейл на шефа ми, че днес съм болен.",
         ),
+        # Self-correction marker is deliberately "извинявай", NOT "не чакай":
+        # unlike English "no wait", Bulgarian "не чакай" is also a literal
+        # imperative ("do not wait"). Teaching it as a correction marker made the
+        # model treat "не чакай X" as DELETE-what-follows, so ordinary sentences
+        # ("тръгвай веднага не чакай автобуса") came back gutted — 0/3 runs kept
+        # the clause. With this example the same sentences survive 3/3. Still
+        # teaches the stutter fix and the counting form (столове -> стола).
         (
-            "искам да да поръчам пет столове не чакай шест за заседателната зала",
+            "искам да да поръчам пет столове, извинявай, шест за заседателната зала",
             "Искам да поръчам шест стола за заседателната зала.",
         ),
     ],

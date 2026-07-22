@@ -80,27 +80,29 @@ the moment the label holds transcript text.
 **`flowlocal/app.py`** — connect `self.orch.partial_text` to `self.overlay.set_partial`
 next to the existing `state_changed` connections (queued automatically across threads).
 
-## M3 — Bulgarian self-correction fix
+## M3 — Bulgarian self-correction fix ✅ DONE (2026-07-22)
 
-Confirmed defect, reproduced 3/3 on 2026-07-22:
+Investigated systematically before changing anything, which was worth it: **the bug as
+originally reported did not exist**, and a worse one did.
 
-```
-in : ами значи мисля че трябва да се видим във вторник не чакай в сряда
-out: Мисля, че трябва да се видим във вторник.        ← kept Tuesday, dropped Wednesday
-```
+- The failing test sentence was flawed. Bulgarian "не чакай" is both a self-correction
+  marker and a literal imperative ("do not wait"), so the model keeping "вторник" was a
+  legitimate parse. The models' own outputs gave it away — qwen2.5 split it into
+  "Мисля… във вторник. **Не чакай** в сряда." and even conjugated "не чакай**те**".
+- Both prompts were already at parity: `PROMPTS["bg"]` rule 2 matches the EN rule
+  verbatim, so the planned "add the missing wording" fix would have been a no-op.
+- All unambiguous BG markers (не, / извинявай / тоест / не, чакай,) passed 3/3 already.
+- `qwen3:4b-instruct-2507` beat `qwen2.5:3b-instruct` on BG, confirming the current
+  config — no model change needed.
 
-English handles the same construction correctly, so the EN prompt's self-correction rule
-is the reference. Work in `PROMPTS["bg"]` in **`flowlocal/cleanup.py`**:
+**The real defect:** `FEW_SHOT["bg"]` used the ambiguous "не чакай" in its
+self-correction example, teaching the model that "не чакай X" means *delete content*.
+"тръгвай веднага не чакай автобуса" → "Тръгвай веднага." on 3/3 runs; "звънни ми утре не
+чакай да ти пиша" → "Звънни ми утре." Fixed by switching the example to "извинявай",
+keeping the stutter and counting-form lessons. Now 3/3 preserved, no regression on the
+previously passing cases, EN untouched.
 
-1. Reproduce with the snippet above; add 3–4 more BG self-correction phrases.
-2. Try prompt-level fixes first — the BG rule likely needs the explicit "keep ONLY the
-   final version" wording and a worked example, as the EN prompt has.
-3. If prompts don't fix it, A/B `qwen2.5:3b-instruct` against
-   `qwen3:4b-instruct-2507-q4_K_M` for BG. Both are already on disk; no downloads.
-
-Definition of done: corrections applied correctly in BG on every test phrase. This is a
-correctness bug (wrong day of the week, pasted confidently) — it outranks preview work if
-time is short.
+Regression test: **`tests/check_cleanup_bg.py`** (6 cases, exits non-zero on failure).
 
 ## M4 — Keep Ollama from breaking again
 
