@@ -40,19 +40,48 @@ previously passing cases, EN untouched.
 
 Regression test: **`tests/check_cleanup_bg.py`** (6 cases, exits non-zero on failure).
 
-## M4 — Keep Ollama from breaking again (next up)
+## M4 — Keep Ollama from breaking again ✅ DONE (2026-07-23)
 
-The models path was fixed on 2026-07-22, but the user's Startup shortcut still launches
-`ollama app.exe`, which forces the bad `OLLAMA_MODELS`. If it wins the race for port
-11434, cleanup silently dies again.
+The models path was fixed on 2026-07-22, but the user's Startup shortcut still launched
+`ollama app.exe`, which forces the bad `OLLAMA_MODELS`. If it won the race for port
+11434, cleanup would silently die again.
 
-- `_preload` in `orchestrator.py` already calls the now model-aware `health_check()`.
-  Extend the failure path: when the server is reachable but `missing_models()` is
-  non-empty, attempt one restart of the server through `try_start_ollama()` before giving
-  up, since we now know how to start it correctly.
-- Offer to repoint the Startup shortcut at `ollama.exe serve` with a correct
-  `OLLAMA_MODELS`. **Ask before touching it** — it is the user's own shortcut.
-- Add the regression check to the verification list below.
+**Race condition in `_preload()`, fixed.** `app.py`'s `run()` already tries to auto-start
+Ollama in a background thread when unhealthy (`_try_recover_ollama`), but
+`orchestrator._preload()` ran its OWN one-shot `health_check()` in parallel — if that
+landed before recovery finished starting Ollama, `ollama_ok` latched `False` for the rest
+of the session even though Ollama came up moments later. `_preload` now calls
+`_wait_for_cleanup_ready()`, which retries `health_check()` for up to 15s (matching
+`_try_recover_ollama`'s own window) before giving up, giving the parallel recovery attempt
+a real chance to land. Verified: normal healthy startup is unaffected (single check
+succeeds immediately, no added delay).
+
+**Startup shortcut: detect + offer to fix, never silent.** Verified first (important,
+changed the design): a bare `ollama.exe serve` with **no** `OLLAMA_MODELS` override at all
+correctly defaults to `<home>/.ollama/models` — the bug is specific to the tray app's own
+wrapper, not Ollama itself. So the fix is to repoint the shortcut at the CLI directly, not
+to inject an env var (which a `.lnk` can't hold anyway).
+
+- `cleanup.py`: `ollama_startup_shortcut()` detects whether `Startup\Ollama.lnk` points at
+  `ollama app.exe`; `fix_ollama_startup_shortcut()` repoints it at `ollama.exe serve`.
+- `app.py`: `_offer_shortcut_fix()` shows a `QMessageBox` (Yes/No, default No) explaining
+  the trade-off — fixes the model-folder bug for good, but the user loses the Ollama tray
+  icon at login since FlowLocal starts Ollama itself anyway. Asked **at most once, ever**
+  regardless of the answer (`cfg.ollama_shortcut_fix_asked`), never touches the shortcut
+  without that explicit confirmation.
+- **Caught and fixed a real regression while wiring this in**: the first version called
+  `_offer_shortcut_fix()` synchronously before `orch.start()`/`hook.start()` — since
+  `QMessageBox.question()` blocks the calling function until dismissed, this meant the
+  *entire app*, including the CapsLock hook, would not become live until the one-time
+  dialog was answered. Confirmed by testing: `flowlocal.log` stayed completely empty after
+  launch. Fixed by starting the hook/orchestrator first and deferring the dialog via
+  `QTimer.singleShot(0, ...)` so it fires only after dictation is already fully live.
+  Reverified: `state: IDLE` (hook + whisper + cleanup all up) is reached with the process
+  fully responsive, regardless of whether the dialog has been answered yet.
+
+Verified against the real, currently-broken shortcut on this machine (detection correctly
+found it); the actual repoint was left for the user to accept or decline via the real
+one-time dialog on their own next restart, rather than triggered by this investigation.
 
 ## Verification
 
@@ -61,3 +90,13 @@ The models path was fixed on 2026-07-22, but the user's Startup shortcut still l
 - Kill Ollama mid-session → raw text pasted with a warning, nothing lost.
 - Start with Ollama's tray app already running → the app reports the real state instead
   of claiming health (regression test for the bug found on 2026-07-22).
+- Fresh launch reaches `state: IDLE` (dictation-ready) whether or not the one-time
+  shortcut-fix dialog has been answered yet (M4 regression test — this broke once).
+- Accepting the shortcut-fix dialog repoints `Startup\Ollama.lnk` at `ollama.exe serve`;
+  declining leaves it untouched either way, and it is never asked again.
+
+## v2 status
+
+M3 and M4 are both done. No further items are currently planned — the live-preview
+feature that originally motivated this plan was dropped by the user (see Context above).
+Revisit this doc when a new v2-scale piece of work is proposed.

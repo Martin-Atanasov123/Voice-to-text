@@ -52,6 +52,8 @@ class Config:
     command_modifier: str = "shift"
     autostart: bool = True
     overlay_position: str = "bottom-center"
+    # Asked once, ever, regardless of the answer -- see FlowLocalApp._offer_shortcut_fix.
+    ollama_shortcut_fix_asked: bool = False
 
     @classmethod
     def load(cls) -> "Config":

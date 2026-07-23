@@ -3,7 +3,7 @@ import logging
 import logging.handlers
 import sys
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
@@ -154,10 +154,57 @@ class FlowLocalApp:
         except OSError as e:
             QMessageBox.critical(None, "FlowLocal", f"Keyboard hook failed: {e}")
             return 1
+        # deferred to the next event-loop iteration: dictation is already fully
+        # live by the time this modal (one-time, at most) can possibly appear —
+        # a direct call here would block hook.start()/orch.start() behind it,
+        # making the app look frozen until the dialog is answered
+        QTimer.singleShot(0, self._offer_shortcut_fix)
         rc = self.qt.exec()
         self.hook.stop()  # CapsLock behaves normally again after quit
         self.orch.shutdown()
         return rc
+
+    def _offer_shortcut_fix(self) -> None:
+        """One-time (ever, once actually asked, regardless of the answer)
+        offer to repoint the user's own Ollama Startup shortcut away from the
+        tray app, which is what forces the wrong OLLAMA_MODELS on this
+        machine (see cleanup.py's ollama_startup_shortcut docstring). Asks
+        explicitly before touching a shortcut the user created themselves —
+        never fixed silently."""
+        if self.cfg.ollama_shortcut_fix_asked:
+            return
+        from .cleanup import fix_ollama_startup_shortcut, ollama_startup_shortcut
+
+        path = ollama_startup_shortcut()
+        if path is None:
+            return  # nothing broken to ask about; don't spend the one-time flag
+        self.cfg.ollama_shortcut_fix_asked = True
+        self.cfg.save()
+        reply = QMessageBox.question(
+            None,
+            "FlowLocal",
+            "Ollama's own Startup shortcut launches its tray app, which on this machine "
+            "starts the server with the wrong model folder — cleanup silently stops "
+            "working until Ollama is restarted correctly.\n\n"
+            "Repoint that shortcut to launch Ollama's background server directly "
+            "instead? This fixes the model-folder bug for good, but you'll lose the "
+            "Ollama tray icon at login (FlowLocal doesn't need it — it starts Ollama "
+            "itself if it isn't already running).\n\n"
+            "You can always change this later from the Windows Startup folder.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            if fix_ollama_startup_shortcut(path):
+                self.tray.showMessage(
+                    "FlowLocal", "Ollama's Startup shortcut has been fixed.",
+                    QSystemTrayIcon.Information, 5000,
+                )
+            else:
+                self.tray.showMessage(
+                    "FlowLocal", "Couldn't update the Ollama Startup shortcut — no change made.",
+                    QSystemTrayIcon.Warning, 5000,
+                )
 
     def _try_recover_ollama(self) -> None:
         """Ollama has to be manually launched after each reboot (its own

@@ -79,7 +79,7 @@ class Orchestrator(QObject):
         except Exception as e:
             self._set_state("ERROR", f"speech model failed: {e}")
             return
-        self.ollama_ok = self.cleaner.health_check()
+        self.ollama_ok = self._wait_for_cleanup_ready()
         if self.cfg.cleanup_enabled and self.ollama_ok:
             self._set_state("LOADING", "warming up cleanup model…")
             self.cleaner.warm_up()
@@ -87,6 +87,24 @@ class Orchestrator(QObject):
         if self.cfg.cleanup_enabled and not self.ollama_ok:
             detail += " — cleanup unavailable, will paste raw text"
         self._set_state("IDLE", detail)
+
+    def _wait_for_cleanup_ready(self, timeout_s: float = 15.0) -> bool:
+        """app.py kicks off its own Ollama auto-start/recovery in a background
+        thread in parallel with this preload (see FlowLocalApp._try_recover_ollama).
+        A single immediate health_check() here would race it: if Ollama happens
+        to still be starting up at this exact instant, this would latch
+        ollama_ok False for the rest of the session even though recovery lands
+        moments later. Give that recovery attempt the same window to land."""
+        if self.cleaner.health_check():
+            return True
+        if not self.cfg.cleanup_enabled:
+            return False
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            time.sleep(1)
+            if self.cleaner.health_check():
+                return True
+        return False
 
     def shutdown(self) -> None:
         self._cmds.put(("quit", None))

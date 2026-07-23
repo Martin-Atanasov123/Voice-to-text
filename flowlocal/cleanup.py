@@ -431,6 +431,53 @@ def try_start_ollama() -> bool:
         return False
 
 
+def ollama_startup_shortcut() -> Path | None:
+    """Path to the user's own Ollama Startup shortcut if it launches the tray
+    app ('ollama app.exe') -- the thing that forces the wrong OLLAMA_MODELS.
+    None if there is no such shortcut, or it's already been repointed."""
+    path = (
+        Path(os.environ.get("APPDATA", ""))
+        / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "Ollama.lnk"
+    )
+    if not path.is_file():
+        return None
+    try:
+        import win32com.client
+
+        shell = win32com.client.Dispatch("WScript.Shell")
+        lnk = shell.CreateShortcut(str(path))
+        if Path(lnk.TargetPath).name.lower() == "ollama app.exe":
+            return path
+    except Exception:
+        pass
+    return None
+
+
+def fix_ollama_startup_shortcut(path: Path) -> bool:
+    """Repoint the shortcut at the `ollama` CLI's own 'serve' command instead
+    of the tray app. Verified 2026-07-23: a bare 'ollama.exe serve' with no
+    OLLAMA_MODELS override at all correctly defaults to <home>/.ollama/models
+    -- the bug is specific to the tray app's own wrapper, not Ollama itself.
+    Trade-off the caller must have already surfaced to the user: this removes
+    the Ollama tray icon at login (no GUI, just the background server)."""
+    exe = find_ollama_exe()
+    if exe is None:
+        return False
+    try:
+        import win32com.client
+
+        shell = win32com.client.Dispatch("WScript.Shell")
+        lnk = shell.CreateShortcut(str(path))
+        lnk.TargetPath = exe
+        lnk.Arguments = "serve"
+        lnk.WorkingDirectory = str(Path(exe).parent)
+        lnk.Save()
+        return True
+    except Exception as e:
+        log.warning("Failed to repoint Ollama Startup shortcut: %s", e)
+        return False
+
+
 def list_ollama_models(url: str) -> list[dict]:
     """Installed Ollama models: [{'name', 'size_gb'}], newest first. [] if unreachable."""
     try:
